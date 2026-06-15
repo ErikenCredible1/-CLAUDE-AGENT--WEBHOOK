@@ -4,7 +4,10 @@ let qstash = null;
 
 function getQStash() {
   if (!qstash) {
-    qstash = new Client({ token: process.env.QSTASH_TOKEN });
+    qstash = new Client({
+      token: process.env.QSTASH_TOKEN,
+      baseUrl: process.env.QSTASH_URL,
+    });
   }
   return qstash;
 }
