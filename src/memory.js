@@ -30,7 +30,19 @@ async function loadHistory(userId) {
   try {
     const r = getRedis();
     const items = await r.lrange(`history:${userId}`, -HISTORY_LIMIT, -1);
-    return items.map(cleanMessage);
+    const cleaned = items.map(cleanMessage);
+
+    // Remove orphaned tool messages that have no preceding assistant tool_call
+    const toolCallIds = new Set();
+    for (const msg of cleaned) {
+      if (msg.role === "assistant" && msg.tool_calls) {
+        for (const tc of msg.tool_calls) toolCallIds.add(tc.id);
+      }
+    }
+    return cleaned.filter((msg) => {
+      if (msg.role !== "tool") return true;
+      return toolCallIds.has(msg.tool_call_id);
+    });
   } catch (err) {
     console.warn("Redis loadHistory error:", err.message);
     return [];
