@@ -22,10 +22,10 @@ bot.use((ctx, next) => {
 });
 
 // ── Image message ─────────────────────────────────────────────────────────────
-bot.on("photo", async (ctx) => {
+bot.on("photo", (ctx) => {
   const userId = String(ctx.chat.id);
-  await send(userId, "🖼️ Got your image, analysing...");
-  try {
+  send(userId, "🖼️ Got your image, analysing...").catch(() => {});
+  (async () => {
     const photo = ctx.message.photo[ctx.message.photo.length - 1];
     const fileInfo = await bot.telegram.getFile(photo.file_id);
     const fileUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${fileInfo.file_path}`;
@@ -36,9 +36,9 @@ bot.on("photo", async (ctx) => {
       await send(userId, `🔧 ${p}`).catch(() => {});
     });
     await send(userId, `✅ Done!\n\n${result}`);
-  } catch (err) {
-    await send(userId, `❌ Error analysing image: ${err.message}`).catch(() => {});
-  }
+  })().catch((err) => {
+    send(userId, `❌ Error analysing image: ${err.message}`).catch(() => {});
+  });
 });
 
 // ── File/document message ─────────────────────────────────────────────────────
@@ -99,17 +99,17 @@ bot.on("text", async (ctx) => {
     }
   }
 
-  // Regular agent message
-  try {
-    await send(userId, "⏳ Working on it...");
-    const result = await runAgent(userId, text, async (p) => {
-      await send(userId, `🔧 ${p}`).catch(() => {});
-    });
-    await send(userId, `✅ Done!\n\n${result}`);
-  } catch (err) {
+  // Regular agent message — fire and forget so Telegraf responds 200 immediately
+  // (awaiting here causes a 90s timeout → crash → Telegram retry loop)
+  send(userId, "⏳ Working on it...").catch(() => {});
+  runAgent(userId, text, async (p) => {
+    await send(userId, `🔧 ${p}`).catch(() => {});
+  }).then((result) => {
+    send(userId, `✅ Done!\n\n${result}`).catch(() => {});
+  }).catch((err) => {
     console.error("Agent error:", err);
-    await send(userId, `❌ Something went wrong:\n${err.message}`).catch(() => {});
-  }
+    send(userId, `❌ Something went wrong:\n${err.message}`).catch(() => {});
+  });
 });
 
 // ── QStash scheduled task endpoint ───────────────────────────────────────────
