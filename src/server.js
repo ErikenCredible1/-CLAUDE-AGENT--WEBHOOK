@@ -159,6 +159,7 @@ app.get("/google-test", async (req, res) => {
     GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID ? "✅ set" : "❌ missing",
     GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET ? "✅ set" : "❌ missing",
     GOOGLE_REFRESH_TOKEN: process.env.GOOGLE_REFRESH_TOKEN ? "✅ set" : "❌ missing",
+    GOOGLE_SERVICE_ACCOUNT_JSON: process.env.GOOGLE_SERVICE_ACCOUNT_JSON ? "✅ set" : "❌ missing",
   };
 
   try {
@@ -195,8 +196,12 @@ app.get("/google-test", async (req, res) => {
 
   try {
     const sheets = getSheets();
-    await sheets.spreadsheets.get({ spreadsheetId: "test" }).catch((err) => {
-      if (err.code === 401 || err.code === 403) throw err;
+    await sheets.spreadsheets.create({
+      requestBody: { properties: { title: "_google_test_probe" } },
+    }).then(async (res) => {
+      // Clean up the test spreadsheet
+      const drive = getDrive();
+      await drive.files.delete({ fileId: res.data.spreadsheetId }).catch(() => {});
     });
     results.sheets = "✅ Sheets OK";
   } catch (err) {
