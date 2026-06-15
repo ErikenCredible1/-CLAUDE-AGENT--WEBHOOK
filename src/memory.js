@@ -19,11 +19,17 @@ const SUMMARY_TRIGGER = 40; // summarize when history exceeds this
 
 // ── Conversation history ──────────────────────────────────────────────────────
 
+function cleanMessage(msg) {
+  if (!msg || typeof msg !== "object") return msg;
+  const { reasoning, reasoning_details, refusal, ...clean } = msg;
+  return clean;
+}
+
 async function loadHistory(userId) {
   try {
     const r = getRedis();
     const items = await r.lrange(`history:${userId}`, -HISTORY_LIMIT, -1);
-    return items;
+    return items.map(cleanMessage);
   } catch (err) {
     console.warn("Redis loadHistory error:", err.message);
     return [];
