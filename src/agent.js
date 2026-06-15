@@ -172,6 +172,9 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
     ...history,
   ];
 
+  const MAX_TOOL_CALLS = 10;
+  let toolCallCount = 0;
+
   while (true) {
     const response = await callLLM(messages);
     const choice = response.choices[0];
@@ -186,7 +189,13 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
       return assistantMsg.content;
     }
 
+    if (toolCallCount >= MAX_TOOL_CALLS) {
+      fallbackHistories.set(userId, history.slice(-30));
+      return assistantMsg.content || "I reached the maximum number of steps for this task. Please try breaking it into smaller requests.";
+    }
+
     for (const toolCall of assistantMsg.tool_calls) {
+      toolCallCount++;
       const toolName = toolCall.function.name;
       let toolArgs;
       try {
