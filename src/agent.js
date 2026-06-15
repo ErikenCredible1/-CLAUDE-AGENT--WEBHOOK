@@ -5,7 +5,29 @@ const { loadHistory, saveMessage, clearHistory, saveFact, loadFacts, deleteFact,
 
 const ALL_TOOL_DEFINITIONS = [...TOOL_DEFINITIONS, ...GOOGLE_TOOL_DEFINITIONS];
 
-const fallbackHistories = new Map();
+// ── Per-user lock — prevents concurrent messages corrupting history ────────────
+const userLocks = new Map();
+
+async function withUserLock(userId, fn) {
+  while (userLocks.has(userId)) {
+    await userLocks.get(userId);
+  }
+  let resolve;
+  const lock = new Promise((r) => { resolve = r; });
+  userLocks.set(userId, lock);
+  try {
+    return await fn();
+  } finally {
+    userLocks.delete(userId);
+    resolve();
+  }
+}
+
+// ── Clear-command detection — accept common variants ─────────────────────────
+function isClearCommand(text) {
+  const normalized = text.toLowerCase().replace(/['"\/]/g, "").trim();
+  return ["forget", "clear", "reset", "start", "clearhistory", "clear history"].includes(normalized);
+}
 
 function getSystemPrompt(memoryBlock = null) {
   const today = new Date().toLocaleDateString("en-US", {
@@ -103,69 +125,65 @@ Seats 7-8, Land Cruiser platform, exceptional longevity
 Seats 7, best handling in class, strong resale value`;
 }
 
-/**
- * Run agent for a text message.
- */
 async function runAgent(userId, userInput, onProgress) {
-  if (userInput.toLowerCase().trim() === "forget") {
-    await clearHistory(userId);
-    fallbackHistories.delete(userId);
-    return "🧹 Memory cleared! Starting fresh.";
-  }
+  return withUserLock(userId, async () => {
+    if (isClearCommand(userInput)) {
+      await clearHistory(userId);
+      return "🧹 Conversation cleared! Starting fresh.";
+    }
 
-  let history = await loadHistory(userId);
-  if (history.length === 0 && fallbackHistories.has(userId)) {
-    history = fallbackHistories.get(userId);
-  }
+    const memoryBlock = await buildMemoryBlock(userId);
+    const userMsg = { role: "user", content: userInput };
+    let history = await loadHistory(userId);
+    history.push(userMsg);
+    await saveMessage(userId, userMsg);
 
-  const memoryBlock = await buildMemoryBlock(userId);
-  const userMsg = { role: "user", content: userInput };
-  history.push(userMsg);
-  await saveMessage(userId, userMsg);
-
-  return await agentLoop(userId, history, onProgress, memoryBlock);
-}
-
-/**
- * Run agent for an image message.
- * Downloads the image from LINE and sends it to the LLM with vision.
- */
-async function runAgentWithImage(userId, imageBuffer, caption, onProgress) {
-  let history = await loadHistory(userId);
-  if (history.length === 0 && fallbackHistories.has(userId)) {
-    history = fallbackHistories.get(userId);
-  }
-
-  const base64 = imageBuffer.toString("base64");
-
-  const userMsg = {
-    role: "user",
-    content: [
-      {
-        type: "image_url",
-        image_url: { url: `data:image/jpeg;base64,${base64}` },
-      },
-      {
-        type: "text",
-        text: caption || "What is in this image? Describe it in detail.",
-      },
-    ],
-  };
-
-  history.push(userMsg);
-  // Save a text-only version to history (base64 is too large to store)
-  await saveMessage(userId, {
-    role: "user",
-    content: caption || "[Image sent by user]",
+    try {
+      return await agentLoop(userId, history, onProgress, memoryBlock);
+    } catch (err) {
+      // If the LLM rejected the request (likely corrupt history), auto-clear and retry once
+      if (err.message.includes("(400)") || err.message.includes("(422)")) {
+        console.warn(`[runAgent] LLM error for ${userId}, clearing history and retrying fresh`);
+        await clearHistory(userId);
+        await saveMessage(userId, userMsg);
+        return await agentLoop(userId, [userMsg], onProgress, memoryBlock);
+      }
+      throw err;
+    }
   });
-
-  const memoryBlock = await buildMemoryBlock(userId);
-  return await agentLoop(userId, history, onProgress, memoryBlock);
 }
 
-/**
- * Core agentic loop — shared by text and image handlers.
- */
+async function runAgentWithImage(userId, imageBuffer, caption, onProgress) {
+  return withUserLock(userId, async () => {
+    const base64 = imageBuffer.toString("base64");
+    const userMsg = {
+      role: "user",
+      content: [
+        { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64}` } },
+        { type: "text", text: caption || "What is in this image? Describe it in detail." },
+      ],
+    };
+
+    let history = await loadHistory(userId);
+    history.push(userMsg);
+    await saveMessage(userId, { role: "user", content: caption || "[Image sent by user]" });
+
+    const memoryBlock = await buildMemoryBlock(userId);
+
+    try {
+      return await agentLoop(userId, history, onProgress, memoryBlock);
+    } catch (err) {
+      if (err.message.includes("(400)") || err.message.includes("(422)")) {
+        console.warn(`[runAgentWithImage] LLM error for ${userId}, retrying fresh`);
+        await clearHistory(userId);
+        await saveMessage(userId, { role: "user", content: caption || "[Image sent by user]" });
+        return await agentLoop(userId, [userMsg], onProgress, memoryBlock);
+      }
+      throw err;
+    }
+  });
+}
+
 async function agentLoop(userId, history, onProgress, memoryBlock = null) {
   const messages = [
     { role: "system", content: getSystemPrompt(memoryBlock) },
@@ -178,7 +196,8 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
   while (true) {
     const response = await callLLM(messages);
     const choice = response.choices[0];
-    // Strip reasoning fields and normalize null content — both cause provider errors on replay
+
+    // Strip reasoning fields and normalize null content
     const { reasoning, reasoning_details, refusal, ...cleanMsg } = choice.message;
     if (cleanMsg.content === null || cleanMsg.content === undefined) cleanMsg.content = "";
     const assistantMsg = cleanMsg;
@@ -188,12 +207,10 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
     await saveMessage(userId, assistantMsg);
 
     if (choice.finish_reason === "stop" || !assistantMsg.tool_calls?.length) {
-      fallbackHistories.set(userId, history.slice(-30));
       return assistantMsg.content;
     }
 
     if (toolCallCount >= MAX_TOOL_CALLS) {
-      fallbackHistories.set(userId, history.slice(-30));
       return assistantMsg.content || "I reached the maximum number of steps for this task. Please try breaking it into smaller requests.";
     }
 
@@ -211,7 +228,6 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
 
       let toolResult;
       try {
-        // Try Google tools first, fall back to regular tools
         const googleResult = await executeGoogleTool(toolName, toolArgs);
         toolResult = googleResult !== null ? googleResult : await executeTool(toolName, toolArgs, userId);
       } catch (err) {
@@ -237,12 +253,7 @@ async function callLLM(messages) {
   try {
     res = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
-      {
-        model,
-        messages,
-        tools: ALL_TOOL_DEFINITIONS,
-        max_tokens: 2048,
-      },
+      { model, messages, tools: ALL_TOOL_DEFINITIONS, max_tokens: 2048 },
       {
         headers: {
           Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
@@ -253,7 +264,6 @@ async function callLLM(messages) {
       }
     );
   } catch (err) {
-    // Axios throws on 4xx/5xx — extract the actual body for a useful error message
     const body = err.response?.data;
     const detail = body ? (body.error?.message || JSON.stringify(body).slice(0, 300)) : err.message;
     console.error("[callLLM] HTTP error:", err.response?.status, detail);
@@ -261,14 +271,11 @@ async function callLLM(messages) {
   }
 
   const data = res.data;
-
   if (data.error) {
-    const fullError = JSON.stringify(data.error);
-    console.error("[callLLM] API error:", fullError);
-    throw new Error(`OpenRouter error: ${fullError}`);
+    console.error("[callLLM] API error:", JSON.stringify(data.error));
+    throw new Error(`OpenRouter error: ${JSON.stringify(data.error)}`);
   }
   if (!data.choices || data.choices.length === 0) {
-    console.error("[callLLM] No choices:", JSON.stringify(data).slice(0, 300));
     throw new Error(`No response from model. Raw: ${JSON.stringify(data).slice(0, 300)}`);
   }
 
@@ -277,28 +284,28 @@ async function callLLM(messages) {
 
 function describeToolCall(name, args) {
   switch (name) {
-    case "web_search":        return `Searching: "${args.query}"`;
-    case "run_js":            return `Running code...`;
-    case "http_request":      return `Fetching ${args.url}`;
-    case "read_file":         return `Reading ${args.filename}`;
-    case "write_file":        return `Writing ${args.filename}`;
-    case "get_stock_price":   return `Getting ${args.symbol} price...`;
-    case "get_crypto_price":  return `Getting ${args.coin} price...`;
-    case "set_price_alert":   return `Setting price alert for ${args.symbol}...`;
-    case "read_uploaded_file":return `Reading uploaded file: ${args.filename}`;
-    case "send_email":        return `Sending email to ${args.to}...`;
-    case "read_emails":       return `Searching emails: "${args.query}"...`;
-    case "upload_to_drive":   return `Uploading ${args.filename} to Drive...`;
-    case "list_drive_files":  return `Listing Drive files...`;
-    case "read_drive_file":   return `Reading ${args.filename} from Drive...`;
-    case "create_calendar_event": return `Creating calendar event: ${args.title}...`;
-    case "read_calendar":     return `Checking calendar...`;
-    case "create_sheet":      return `Creating spreadsheet: ${args.title}...`;
-    case "remember":          return `Remembering: ${args.key}...`;
-    case "recall":            return `Recalling facts about you...`;
-    case "forget_fact":       return `Forgetting: ${args.key}...`;
-    case "create_pdf":        return `Creating PDF: ${args.filename}...`;
-    default:                  return `Using tool: ${name}`;
+    case "web_search":             return `Searching: "${args.query}"`;
+    case "run_js":                 return `Running code...`;
+    case "http_request":           return `Fetching ${args.url}`;
+    case "read_file":              return `Reading ${args.filename}`;
+    case "write_file":             return `Writing ${args.filename}`;
+    case "get_stock_price":        return `Getting ${args.symbol} price...`;
+    case "get_crypto_price":       return `Getting ${args.coin} price...`;
+    case "set_price_alert":        return `Setting price alert for ${args.symbol}...`;
+    case "read_uploaded_file":     return `Reading uploaded file: ${args.filename}`;
+    case "send_email":             return `Sending email to ${args.to}...`;
+    case "read_emails":            return `Searching emails: "${args.query}"...`;
+    case "upload_to_drive":        return `Uploading ${args.filename} to Drive...`;
+    case "list_drive_files":       return `Listing Drive files...`;
+    case "read_drive_file":        return `Reading ${args.filename} from Drive...`;
+    case "create_calendar_event":  return `Creating calendar event: ${args.title}...`;
+    case "read_calendar":          return `Checking calendar...`;
+    case "create_sheet":           return `Creating spreadsheet: ${args.title}...`;
+    case "remember":               return `Remembering: ${args.key}...`;
+    case "recall":                 return `Recalling facts about you...`;
+    case "forget_fact":            return `Forgetting: ${args.key}...`;
+    case "create_pdf":             return `Creating PDF: ${args.filename}...`;
+    default:                       return `Using tool: ${name}`;
   }
 }
 
