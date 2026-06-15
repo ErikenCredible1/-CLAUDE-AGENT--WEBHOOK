@@ -140,7 +140,7 @@ app.get("/qstash-test", async (req, res) => {
     RENDER_URL: process.env.RENDER_URL || "❌ missing",
   };
   try {
-    const q = new Client({ token: process.env.QSTASH_TOKEN });
+    const q = new Client({ token: process.env.QSTASH_TOKEN, baseUrl: process.env.QSTASH_URL });
     const schedules = await q.schedules.list();
     results.connection = "✅ QStash connected";
     results.scheduleCount = schedules.length;
