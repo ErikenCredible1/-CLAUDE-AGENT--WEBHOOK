@@ -178,7 +178,9 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
   while (true) {
     const response = await callLLM(messages);
     const choice = response.choices[0];
-    const assistantMsg = choice.message;
+    // Strip reasoning fields — sending them back causes provider errors
+    const { reasoning, reasoning_details, refusal, ...cleanMsg } = choice.message;
+    const assistantMsg = cleanMsg;
 
     messages.push(assistantMsg);
     history.push(assistantMsg);
