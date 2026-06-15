@@ -25,7 +25,7 @@ app.post("/webhook", middleware(lineConfig), (req, res) => {
   res.status(200).end();
   req.body.events.forEach((event) => {
     if (event.type === "message") {
-      handleEvent(event);
+      handleEvent(event).catch((err) => console.error("Unhandled event error:", err));
     }
   });
 });
@@ -104,15 +104,15 @@ async function handleEvent(event) {
   }
 
   // Regular agent message
-  await send(userId, "⏳ Working on it...");
   try {
+    await send(userId, "⏳ Working on it...");
     const result = await runAgent(userId, text, async (p) => {
-      await send(userId, `🔧 ${p}`);
+      await send(userId, `🔧 ${p}`).catch(() => {});
     });
     await send(userId, `✅ Done!\n\n${result}`);
   } catch (err) {
     console.error("Agent error:", err);
-    await send(userId, `❌ Something went wrong:\n${err.message}`);
+    await send(userId, `❌ Something went wrong:\n${err.message}`).catch(() => {});
   }
 }
 
