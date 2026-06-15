@@ -246,7 +246,18 @@ async function callLLM(messages) {
       },
     }
   );
-  return res.data;
+
+  const data = res.data;
+
+  // Surface API-level errors instead of crashing on undefined choices
+  if (data.error) {
+    throw new Error(`OpenRouter error: ${data.error.message || JSON.stringify(data.error)}`);
+  }
+  if (!data.choices || data.choices.length === 0) {
+    throw new Error(`Unexpected response from model (no choices). Raw: ${JSON.stringify(data).slice(0, 300)}`);
+  }
+
+  return data;
 }
 
 function describeToolCall(name, args) {
