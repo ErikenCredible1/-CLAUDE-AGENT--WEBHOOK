@@ -22,6 +22,7 @@ const SUMMARY_TRIGGER = 40; // summarize when history exceeds this
 function cleanMessage(msg) {
   if (!msg || typeof msg !== "object") return msg;
   const { reasoning, reasoning_details, refusal, ...clean } = msg;
+  if (clean.content === null || clean.content === undefined) clean.content = "";
   return clean;
 }
 

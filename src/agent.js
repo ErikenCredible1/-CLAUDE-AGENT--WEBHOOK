@@ -176,10 +176,11 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
   let toolCallCount = 0;
 
   while (true) {
-    const response = await callLLMWithFallback(messages);
+    const response = await callLLM(messages);
     const choice = response.choices[0];
-    // Strip reasoning fields — sending them back causes provider errors
+    // Strip reasoning fields and normalize null content — both cause provider errors on replay
     const { reasoning, reasoning_details, refusal, ...cleanMsg } = choice.message;
+    if (cleanMsg.content === null || cleanMsg.content === undefined) cleanMsg.content = "";
     const assistantMsg = cleanMsg;
 
     messages.push(assistantMsg);
@@ -230,18 +231,8 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
   }
 }
 
-const FALLBACK_MODEL = "google/gemini-2.5-flash-preview-05-20";
-
-async function callLLMWithFallback(messages) {
-  try {
-    return await callLLM(messages, process.env.OPENROUTER_MODEL || "anthropic/claude-sonnet-4-5");
-  } catch (err) {
-    console.warn(`[callLLM] Primary model failed: ${err.message}. Retrying with fallback...`);
-    return await callLLM(messages, FALLBACK_MODEL);
-  }
-}
-
-async function callLLM(messages, model) {
+async function callLLM(messages) {
+  const model = process.env.OPENROUTER_MODEL || "tencent/hy3-preview";
   let res;
   try {
     res = await axios.post(
