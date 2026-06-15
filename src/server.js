@@ -131,6 +131,25 @@ app.post("/scheduled", express.json(), async (req, res) => {
   }
 });
 
+// ── QStash test endpoint ──────────────────────────────────────────────────────
+app.get("/qstash-test", async (req, res) => {
+  const { Client } = require("@upstash/qstash");
+  const results = {};
+  results.env = {
+    QSTASH_TOKEN: process.env.QSTASH_TOKEN ? "✅ set" : "❌ missing",
+    RENDER_URL: process.env.RENDER_URL || "❌ missing",
+  };
+  try {
+    const q = new Client({ token: process.env.QSTASH_TOKEN });
+    const schedules = await q.schedules.list();
+    results.connection = "✅ QStash connected";
+    results.scheduleCount = schedules.length;
+  } catch (err) {
+    results.connection = `❌ ${err.message}`;
+  }
+  res.json(results);
+});
+
 // ── Google auth test endpoint ─────────────────────────────────────────────────
 app.get("/google-test", async (req, res) => {
   const { getAuth, getDrive, getCalendar, getSheets, getGmail } = require("./google");
