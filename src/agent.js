@@ -176,7 +176,7 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
   let toolCallCount = 0;
 
   while (true) {
-    const response = await callLLM(messages);
+    const response = await callLLMWithFallback(messages);
     const choice = response.choices[0];
     // Strip reasoning fields — sending them back causes provider errors
     const { reasoning, reasoning_details, refusal, ...cleanMsg } = choice.message;
@@ -230,13 +230,24 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
   }
 }
 
-async function callLLM(messages) {
+const FALLBACK_MODEL = "google/gemini-2.5-flash-preview-05-20";
+
+async function callLLMWithFallback(messages) {
+  try {
+    return await callLLM(messages, process.env.OPENROUTER_MODEL || "anthropic/claude-sonnet-4-5");
+  } catch (err) {
+    console.warn(`[callLLM] Primary model failed: ${err.message}. Retrying with fallback...`);
+    return await callLLM(messages, FALLBACK_MODEL);
+  }
+}
+
+async function callLLM(messages, model) {
   let res;
   try {
     res = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
       {
-        model: process.env.OPENROUTER_MODEL || "anthropic/claude-sonnet-4-5",
+        model,
         messages,
         tools: ALL_TOOL_DEFINITIONS,
         max_tokens: 2048,
@@ -261,8 +272,9 @@ async function callLLM(messages) {
   const data = res.data;
 
   if (data.error) {
-    console.error("[callLLM] API error:", JSON.stringify(data.error));
-    throw new Error(`OpenRouter error: ${data.error.message || JSON.stringify(data.error)}`);
+    const fullError = JSON.stringify(data.error);
+    console.error("[callLLM] API error:", fullError);
+    throw new Error(`OpenRouter error: ${fullError}`);
   }
   if (!data.choices || data.choices.length === 0) {
     console.error("[callLLM] No choices:", JSON.stringify(data).slice(0, 300));
