@@ -7,10 +7,14 @@ const ALL_TOOL_DEFINITIONS = [...TOOL_DEFINITIONS, ...GOOGLE_TOOL_DEFINITIONS];
 
 // ── Per-user lock — prevents concurrent messages corrupting history ────────────
 const userLocks = new Map();
+const LOCK_TIMEOUT_MS = 120_000; // 2 min max per request before releasing lock
 
 async function withUserLock(userId, fn) {
   while (userLocks.has(userId)) {
-    await userLocks.get(userId);
+    await Promise.race([
+      userLocks.get(userId),
+      new Promise((r) => setTimeout(r, LOCK_TIMEOUT_MS)), // safety release
+    ]);
   }
   let resolve;
   const lock = new Promise((r) => { resolve = r; });
@@ -255,6 +259,7 @@ async function callLLM(messages) {
       "https://openrouter.ai/api/v1/chat/completions",
       { model, messages, tools: ALL_TOOL_DEFINITIONS, max_tokens: 2048 },
       {
+        timeout: 90_000, // 90s — prevents hanging forever if provider is slow
         headers: {
           Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
           "Content-Type": "application/json",
