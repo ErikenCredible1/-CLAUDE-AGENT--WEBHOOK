@@ -231,32 +231,42 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
 }
 
 async function callLLM(messages) {
-  const res = await axios.post(
-    "https://openrouter.ai/api/v1/chat/completions",
-    {
-      model: process.env.OPENROUTER_MODEL || "anthropic/claude-sonnet-4-5",
-      messages,
-      tools: ALL_TOOL_DEFINITIONS,
-      max_tokens: 2048,
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://your-app.com",
-        "X-Title": "LINE AI Agent",
+  let res;
+  try {
+    res = await axios.post(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        model: process.env.OPENROUTER_MODEL || "anthropic/claude-sonnet-4-5",
+        messages,
+        tools: ALL_TOOL_DEFINITIONS,
+        max_tokens: 2048,
       },
-    }
-  );
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://your-app.com",
+          "X-Title": "LINE AI Agent",
+        },
+      }
+    );
+  } catch (err) {
+    // Axios throws on 4xx/5xx — extract the actual body for a useful error message
+    const body = err.response?.data;
+    const detail = body ? (body.error?.message || JSON.stringify(body).slice(0, 300)) : err.message;
+    console.error("[callLLM] HTTP error:", err.response?.status, detail);
+    throw new Error(`LLM request failed (${err.response?.status}): ${detail}`);
+  }
 
   const data = res.data;
 
-  // Surface API-level errors instead of crashing on undefined choices
   if (data.error) {
+    console.error("[callLLM] API error:", JSON.stringify(data.error));
     throw new Error(`OpenRouter error: ${data.error.message || JSON.stringify(data.error)}`);
   }
   if (!data.choices || data.choices.length === 0) {
-    throw new Error(`Unexpected response from model (no choices). Raw: ${JSON.stringify(data).slice(0, 300)}`);
+    console.error("[callLLM] No choices:", JSON.stringify(data).slice(0, 300));
+    throw new Error(`No response from model. Raw: ${JSON.stringify(data).slice(0, 300)}`);
   }
 
   return data;
