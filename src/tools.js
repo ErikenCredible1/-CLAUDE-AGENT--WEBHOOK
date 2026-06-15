@@ -222,6 +222,44 @@ const TOOL_DEFINITIONS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "create_schedule",
+      description: "Create a recurring scheduled task that runs automatically. Use when the user asks to schedule something regularly e.g. 'every friday analyze the market', 'every monday at 8am check futures'.",
+      parameters: {
+        type: "object",
+        properties: {
+          timing: { type: "string", description: "When to run — natural language e.g. 'every friday at 5pm', 'every monday at 8am', 'every day at 9am', 'every morning'" },
+          task: { type: "string", description: "What the agent should do when the schedule fires — be specific e.g. 'Search for this week\\'s stock market news and give a detailed weekly summary'" },
+          label: { type: "string", description: "Short friendly name for this schedule e.g. 'Weekly market summary', 'Monday futures check'" },
+        },
+        required: ["timing", "task", "label"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_schedules",
+      description: "List all active scheduled tasks for the user.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_schedule",
+      description: "Delete a scheduled task by its label/name.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "The schedule label to delete" },
+        },
+        required: ["name"],
+      },
+    },
+  },
 ];
 
 // ─── Tool implementations ─────────────────────────────────────────────────────
@@ -255,6 +293,24 @@ async function executeTool(name, args, userId = "default") {
       const { deleteFact } = require("./memory");
       await deleteFact(userId, args.key);
       return `Forgotten: ${args.key}`;
+    }
+    case "create_schedule": {
+      const { createSchedule, parseScheduleRequest } = require("./scheduler");
+      const parsed = parseScheduleRequest(args.timing);
+      if (!parsed) return `Could not parse timing "${args.timing}". Try formats like "every friday at 5pm", "every monday at 8am", "every day at 9am", or "every morning".`;
+      await createSchedule(userId, args.task, parsed.cron, args.label);
+      return `Schedule created! "${args.label}" will run ${args.timing}.`;
+    }
+    case "list_schedules": {
+      const { listSchedules } = require("./scheduler");
+      const schedules = await listSchedules(userId);
+      if (!schedules.length) return "No active schedules.";
+      return schedules.map((s, i) => `${i + 1}. ${s.label}\n   When: ${s.cron}\n   Task: ${s.taskPrompt}`).join("\n\n");
+    }
+    case "delete_schedule": {
+      const { deleteSchedule } = require("./scheduler");
+      const deleted = await deleteSchedule(userId, args.name);
+      return deleted ? `Deleted schedule: "${args.name}"` : `No schedule found with name "${args.name}"`;
     }
     default: throw new Error(`Unknown tool: ${name}`);
   }

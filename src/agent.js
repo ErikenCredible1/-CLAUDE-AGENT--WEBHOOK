@@ -47,6 +47,9 @@ TOOLS AVAILABLE:
 - remember: permanently save a fact about the user
 - recall: list all saved facts about the user
 - forget_fact: delete a specific saved fact
+- create_schedule: create a recurring scheduled task (e.g. every friday at 5pm, every monday at 8am)
+- list_schedules: list all active scheduled tasks
+- delete_schedule: delete a scheduled task by name
 
 GOOGLE TOOLS:
 - send_email: send email from the agent's Gmail
