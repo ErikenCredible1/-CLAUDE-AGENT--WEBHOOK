@@ -172,7 +172,7 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
     ...history,
   ];
 
-  const MAX_TOOL_CALLS = 10;
+  const MAX_TOOL_CALLS = 20;
   let toolCallCount = 0;
 
   while (true) {
