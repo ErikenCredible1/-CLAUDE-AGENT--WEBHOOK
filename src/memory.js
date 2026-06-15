@@ -23,7 +23,7 @@ async function loadHistory(userId) {
   try {
     const r = getRedis();
     const items = await r.lrange(`history:${userId}`, -HISTORY_LIMIT, -1);
-    return items.map((item) => JSON.parse(item));
+    return items;
   } catch (err) {
     console.warn("Redis loadHistory error:", err.message);
     return [];
@@ -34,7 +34,7 @@ async function saveMessage(userId, message) {
   try {
     const r = getRedis();
     const key = `history:${userId}`;
-    await r.rpush(key, JSON.stringify(message));
+    await r.rpush(key, message);
     await r.ltrim(key, -HISTORY_MAX, -1);
 
     // Check if we should summarize
@@ -70,7 +70,7 @@ async function summarizeOldHistory(userId) {
     const allItems = await r.lrange(key, 0, -(HISTORY_LIMIT + 1));
     if (allItems.length < 10) return; // not enough to summarize
 
-    const messages = allItems.map((i) => JSON.parse(i));
+    const messages = allItems;
 
     // Build text to summarize
     const conversationText = messages
