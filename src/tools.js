@@ -1,6 +1,7 @@
 const axios = require("axios");
-const { execSync } = require("child_process");
+const { execFileSync } = require("child_process");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 const WORK_DIR = path.join(__dirname, "../workspace");
@@ -356,11 +357,15 @@ async function httpRequest(url, method, body, headers) {
 
 // ── Code execution ────────────────────────────────────────────────────────────
 function runJs(code) {
+  const tmpFile = path.join(os.tmpdir(), `run_js_${Date.now()}_${Math.random().toString(36).slice(2)}.js`);
   try {
-    const result = execSync(`node -e ${JSON.stringify(code)}`, { timeout: 10000, encoding: "utf8" });
+    fs.writeFileSync(tmpFile, code, "utf8");
+    const result = execFileSync("node", [tmpFile], { timeout: 10000, encoding: "utf8" });
     return result || "(no output)";
   } catch (err) {
     return `Error: ${err.stderr || err.message}`;
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch {}
   }
 }
 

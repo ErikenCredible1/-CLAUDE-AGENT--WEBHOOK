@@ -270,17 +270,19 @@ async function callLLM(messages) {
     );
   } catch (err) {
     const body = err.response?.data;
-    const detail = body ? (body.error?.message || JSON.stringify(body).slice(0, 300)) : err.message;
-    console.error("[callLLM] HTTP error:", err.response?.status, detail);
+    const rawBody = body !== undefined ? JSON.stringify(body) : err.message;
+    console.error(`[callLLM] HTTP error ${err.response?.status} — full response body:`, rawBody);
+    const detail = body?.error?.message || rawBody;
     throw new Error(`LLM request failed (${err.response?.status}): ${detail}`);
   }
 
   const data = res.data;
   if (data.error) {
-    console.error("[callLLM] API error:", JSON.stringify(data.error));
+    console.error("[callLLM] API error — full response body:", JSON.stringify(data));
     throw new Error(`OpenRouter error: ${JSON.stringify(data.error)}`);
   }
   if (!data.choices || data.choices.length === 0) {
+    console.error("[callLLM] No choices in response — full response body:", JSON.stringify(data));
     throw new Error(`No response from model. Raw: ${JSON.stringify(data).slice(0, 300)}`);
   }
 
