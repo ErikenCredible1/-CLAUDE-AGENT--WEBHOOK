@@ -51,12 +51,6 @@ const MCP_SERVERS = [
     // duplicates the already-free Tavily web_search.
     allowedTools: ["firecrawl_scrape", "firecrawl_map"],
   },
-  {
-    name: "notion",
-    command: path.join(BIN_DIR, "notion-mcp-server"),
-    args: [],
-    requiredEnv: ["NOTION_TOKEN"],
-  },
 ];
 
 const mcpClients = new Map();   // serverName -> Client
