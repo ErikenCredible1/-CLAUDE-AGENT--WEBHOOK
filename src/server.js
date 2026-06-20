@@ -4,9 +4,10 @@ const { Telegraf } = require("telegraf");
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
-const { runAgent, runAgentWithImage } = require("./agent");
+const { runAgent, runAgentWithImage, refreshToolRegistry } = require("./agent");
 const { createSchedule, listSchedules, deleteSchedule, parseScheduleRequest } = require("./scheduler");
 const { checkPriceAlerts } = require("./alerts");
+const { startMcpServers } = require("./mcp-tools");
 
 const WORK_DIR = path.join(__dirname, "../workspace");
 if (!fs.existsSync(WORK_DIR)) fs.mkdirSync(WORK_DIR, { recursive: true });
@@ -257,4 +258,9 @@ app.listen(PORT, async () => {
     await bot.telegram.setWebhook(`${process.env.RENDER_URL}/webhook`).catch(console.error);
     console.log(`Webhook set: ${process.env.RENDER_URL}/webhook`);
   }
+  // Fire-and-forget: MCP servers can take 10-30s+ to spawn (npx cold-start), and
+  // one failing to start must never block the Telegram webhook from coming up.
+  startMcpServers()
+    .then(refreshToolRegistry)
+    .catch((err) => console.error("[MCP] startup error:", err.message));
 });

@@ -27,23 +27,6 @@ const TOOL_DEFINITIONS = [
   {
     type: "function",
     function: {
-      name: "http_request",
-      description: "Make an HTTP GET or POST request to an external API or URL.",
-      parameters: {
-        type: "object",
-        properties: {
-          url: { type: "string" },
-          method: { type: "string", enum: ["GET", "POST"] },
-          body: { type: "object" },
-          headers: { type: "object" },
-        },
-        required: ["url"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "run_js",
       description: "Execute JavaScript (Node.js) code and return stdout.",
       parameters: {
@@ -53,43 +36,6 @@ const TOOL_DEFINITIONS = [
         },
         required: ["code"],
       },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "write_file",
-      description: "Write content to a file in the workspace directory.",
-      parameters: {
-        type: "object",
-        properties: {
-          filename: { type: "string" },
-          content: { type: "string" },
-        },
-        required: ["filename", "content"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "read_file",
-      description: "Read a file from the workspace directory.",
-      parameters: {
-        type: "object",
-        properties: {
-          filename: { type: "string" },
-        },
-        required: ["filename"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "list_files",
-      description: "List all files in the workspace directory.",
-      parameters: { type: "object", properties: {} },
     },
   },
   {
@@ -268,11 +214,7 @@ const TOOL_DEFINITIONS = [
 async function executeTool(name, args, userId = "default") {
   switch (name) {
     case "web_search":        return await webSearch(args.query);
-    case "http_request":      return await httpRequest(args.url, args.method || "GET", args.body, args.headers);
     case "run_js":            return runJs(args.code);
-    case "write_file":        return writeFile(args.filename, args.content);
-    case "read_file":         return readFile(args.filename);
-    case "list_files":        return listFiles();
     case "get_stock_price":   return await getStockPrice(args.symbol);
     case "get_crypto_price":  return await getCryptoPrice(args.coin);
     case "set_price_alert":   return await setPriceAlert(args.symbol, args.type, args.condition, args.target);
@@ -348,13 +290,6 @@ async function webSearch(query) {
   return parts.length ? parts.join("\n\n") : "No results found.";
 }
 
-// ── HTTP request ──────────────────────────────────────────────────────────────
-async function httpRequest(url, method, body, headers) {
-  const res = await axios({ method, url, data: body, headers: headers || {}, timeout: 15000 });
-  const text = typeof res.data === "string" ? res.data : JSON.stringify(res.data, null, 2);
-  return text.slice(0, 5000);
-}
-
 // ── Code execution ────────────────────────────────────────────────────────────
 function runJs(code) {
   const tmpFile = path.join(os.tmpdir(), `run_js_${Date.now()}_${Math.random().toString(36).slice(2)}.js`);
@@ -367,25 +302,6 @@ function runJs(code) {
   } finally {
     try { fs.unlinkSync(tmpFile); } catch {}
   }
-}
-
-// ── File operations ───────────────────────────────────────────────────────────
-function writeFile(filename, content) {
-  const safeName = path.basename(filename);
-  fs.writeFileSync(path.join(WORK_DIR, safeName), content, "utf8");
-  return `Written ${content.length} chars to ${safeName}`;
-}
-
-function readFile(filename) {
-  const safeName = path.basename(filename);
-  const filePath = path.join(WORK_DIR, safeName);
-  if (!fs.existsSync(filePath)) return `File not found: ${safeName}`;
-  return fs.readFileSync(filePath, "utf8");
-}
-
-function listFiles() {
-  const files = fs.readdirSync(WORK_DIR);
-  return files.length ? files.join("\n") : "Workspace is empty.";
 }
 
 // ── Read uploaded file (PDF, Word, text) ──────────────────────────────────────

@@ -1,20 +1,24 @@
 const axios = require("axios");
 const { executeTool, TOOL_DEFINITIONS } = require("./tools");
 const { executeGoogleTool, GOOGLE_TOOL_DEFINITIONS } = require("./google-tools");
+const { executeMcpTool, getMcpToolDefinitions } = require("./mcp-tools");
 const { loadHistory, saveMessage, clearHistory, saveFact, loadFacts, deleteFact, buildMemoryBlock } = require("./memory");
 
 // ── Lazy tool loading — see get_tool_schema below ──────────────────────────────
 // Full schemas cost ~15k tokens/request if all sent upfront. Instead the model
 // gets a lightweight name+description index in the system prompt, plus this one
 // real meta-tool. Calling it unlocks a tool's full schema for the rest of this turn.
-function buildToolRegistry() {
-  const all = [...TOOL_DEFINITIONS, ...GOOGLE_TOOL_DEFINITIONS];
-  const map = new Map();
-  for (const def of all) map.set(def.function.name, def);
-  return map;
+// MCP tools aren't known until their servers finish starting (see server.js), so
+// the registry is rebuilt via refreshToolRegistry() once that completes.
+const TOOL_REGISTRY = new Map();
+
+function refreshToolRegistry() {
+  TOOL_REGISTRY.clear();
+  const all = [...TOOL_DEFINITIONS, ...GOOGLE_TOOL_DEFINITIONS, ...getMcpToolDefinitions()];
+  for (const def of all) TOOL_REGISTRY.set(def.function.name, def);
 }
 
-const TOOL_REGISTRY = buildToolRegistry();
+refreshToolRegistry();
 
 const GET_TOOL_SCHEMA_DEFINITION = {
   type: "function",
@@ -33,7 +37,13 @@ const GET_TOOL_SCHEMA_DEFINITION = {
 
 function buildToolIndexText() {
   return [...TOOL_REGISTRY.values()]
-    .map((def) => `- ${def.function.name}: ${def.function.description}`)
+    .map((def) => {
+      // Some MCP servers ship long, multi-paragraph descriptions — truncate to
+      // a one-line hint here; the full text is still available via get_tool_schema.
+      const firstLine = def.function.description.split("\n")[0];
+      const desc = firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
+      return `- ${def.function.name}: ${desc}`;
+    })
     .join("\n");
 }
 
@@ -301,7 +311,12 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
             toolResult = "Tool error: no content provided. Write the report as your reply text, then call create_pdf again with just filename and title.";
           } else {
             const googleResult = await executeGoogleTool(toolName, toolArgs);
-            toolResult = googleResult !== null ? googleResult : await executeTool(toolName, toolArgs, userId);
+            if (googleResult !== null) {
+              toolResult = googleResult;
+            } else {
+              const mcpResult = await executeMcpTool(toolName, toolArgs);
+              toolResult = mcpResult !== null ? mcpResult : await executeTool(toolName, toolArgs, userId);
+            }
           }
         }
       } catch (err) {
@@ -364,9 +379,19 @@ function describeToolCall(name, args) {
     case "get_tool_schema":         return `Looking up how to use ${args.tool_name}...`;
     case "web_search":             return `Searching: "${args.query}"`;
     case "run_js":                 return `Running code...`;
-    case "http_request":           return `Fetching ${args.url}`;
-    case "read_file":              return `Reading ${args.filename}`;
-    case "write_file":             return `Writing ${args.filename}`;
+    case "fetch_html":
+    case "fetch_markdown":
+    case "fetch_txt":
+    case "fetch_json":
+    case "fetch_readable":         return `Fetching ${args.url}`;
+    case "fetch_youtube_transcript": return `Getting transcript for ${args.url}...`;
+    case "read_file":
+    case "read_text_file":         return `Reading ${args.path}`;
+    case "write_file":             return `Writing ${args.path}`;
+    case "list_directory":         return `Listing files...`;
+    case "sequentialthinking":     return `Thinking through this...`;
+    case "airbnb_search":          return `Searching Airbnb listings...`;
+    case "airbnb_listing_details": return `Getting Airbnb listing details...`;
     case "get_stock_price":        return `Getting ${args.symbol} price...`;
     case "get_crypto_price":       return `Getting ${args.coin} price...`;
     case "set_price_alert":        return `Setting price alert for ${args.symbol}...`;
@@ -387,4 +412,4 @@ function describeToolCall(name, args) {
   }
 }
 
-module.exports = { runAgent, runAgentWithImage };
+module.exports = { runAgent, runAgentWithImage, refreshToolRegistry };
