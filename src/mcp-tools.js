@@ -50,6 +50,12 @@ const MCP_SERVERS = [
     command: path.join(BIN_DIR, "firecrawl-mcp"),
     args: [],
     requiredEnv: ["FIRECRAWL_API_KEY"],
+    // firecrawl-mcp exposes ~15 tools (crawl, agent, monitor_*, search, ...) on
+    // a shared monthly credit pool. Only allow the two cheap, predictable ones
+    // (1 credit/page, single call) -- crawl/agent/monitor can each burn a large
+    // chunk of the budget in one model-initiated call, and search just
+    // duplicates the already-free Tavily web_search.
+    allowedTools: ["firecrawl_scrape", "firecrawl_map"],
   },
   {
     name: "notion",
@@ -77,7 +83,8 @@ async function startOneServer(cfg) {
     const client = new Client({ name: "telegram-agent", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
 
-    const { tools } = await client.listTools();
+    const { tools: allTools } = await client.listTools();
+    const tools = cfg.allowedTools ? allTools.filter((t) => cfg.allowedTools.includes(t.name)) : allTools;
     for (const tool of tools) {
       mcpToolIndex.set(tool.name, {
         serverName: cfg.name,
