@@ -119,15 +119,16 @@ Telegram does not render markdown in plain text mode. Never use markdown. Specif
 
 Use clean plain text instead:
 - Lists: numbers (1. 2. 3.) or dashes (-)
-- Section headers: use emoji + label e.g. "📊 Results" or "🏆 Top Picks"
+- Section headers: short ALL-CAPS label on its own line, e.g. "RESULTS" or "TOP PICKS"
 - Separate items with a blank line
 - Emphasize with CAPS sparingly
 - Keep it concise — user is on mobile
+- Avoid emoji/special symbols unless the user uses them first — plain ASCII text only
 
 Example:
-🏆 TOP PICKS
-1. Option A — short reason
-2. Option B — short reason`;
+TOP PICKS
+1. Option A - short reason
+2. Option B - short reason`;
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
