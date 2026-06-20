@@ -7,10 +7,18 @@ async function extractTextFromFile(filePath) {
   const ext = path.extname(filePath).toLowerCase();
 
   if (ext === ".pdf") {
-    const pdfParse = require("pdf-parse");
+    // pdf-parse v2 replaced the old callable-function API with a PDFParse
+    // class (new PDFParse({ data: buffer }).getText()) -- must call destroy()
+    // after use to free memory.
+    const { PDFParse } = require("pdf-parse");
     const buffer = fs.readFileSync(filePath);
-    const data = await pdfParse(buffer);
-    return data.text.slice(0, 10000);
+    const parser = new PDFParse({ data: buffer });
+    try {
+      const result = await parser.getText();
+      return result.text.slice(0, 10000);
+    } finally {
+      await parser.destroy();
+    }
   }
 
   if (ext === ".docx" || ext === ".doc") {

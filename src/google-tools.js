@@ -412,9 +412,14 @@ async function readDriveFile({ filename }) {
 
   // Try to parse PDF
   if (file.mimeType === "application/pdf") {
-    const pdfParse = require("pdf-parse");
-    const data = await pdfParse(buffer);
-    return data.text.slice(0, 10000);
+    const { PDFParse } = require("pdf-parse");
+    const parser = new PDFParse({ data: buffer });
+    try {
+      const result = await parser.getText();
+      return result.text.slice(0, 10000);
+    } finally {
+      await parser.destroy();
+    }
   }
 
   // Plain text
