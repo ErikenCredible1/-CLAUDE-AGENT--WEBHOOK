@@ -54,7 +54,18 @@ bot.on("document", async (ctx) => {
     const buffer = Buffer.from(res.data);
     const safeName = path.basename(filename);
     fs.writeFileSync(path.join(WORK_DIR, safeName), buffer);
-    await send(userId, `✅ Saved! You can now say:\n"Summarise ${safeName}"\n"Extract key points from ${safeName}"`);
+
+    let driveNote = "";
+    try {
+      const { executeGoogleTool } = require("./google-tools");
+      const driveResult = await executeGoogleTool("upload_to_drive", { filename: safeName });
+      const linkMatch = driveResult.match(/https:\/\/[^\s]+/);
+      if (linkMatch) driveNote = `\n📁 Also saved to Drive: ${linkMatch[0]}`;
+    } catch (err) {
+      console.warn("Could not auto-save uploaded file to Drive:", err.message);
+    }
+
+    await send(userId, `✅ Saved! You can now say:\n"Summarise ${safeName}"\n"Extract key points from ${safeName}"${driveNote}`);
   } catch (err) {
     await send(userId, `❌ Error saving file: ${err.message}`).catch(() => {});
   }

@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { Readable } = require("stream");
 const { getDrive, getGmail, getCalendar, getSheets } = require("./google");
+const { extractTextFromFile } = require("./file-extract");
 
 const WORK_DIR = path.join(__dirname, "../workspace");
 
@@ -29,7 +30,7 @@ const GOOGLE_TOOL_DEFINITIONS = [
     type: "function",
     function: {
       name: "read_emails",
-      description: "Read and search emails from the agent's Gmail inbox.",
+      description: "Read and search emails from the agent's Gmail inbox. Lists each email's ID and any attachment filenames -- use read_email_attachment to read attachment content.",
       parameters: {
         type: "object",
         properties: {
@@ -37,6 +38,22 @@ const GOOGLE_TOOL_DEFINITIONS = [
           max_results: { type: "number", description: "Max number of emails to return (default 5)" },
         },
         required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_email_attachment",
+      description: "Download and extract text from an email attachment (PDF, Word doc, or text file). Get the message ID from read_emails first. Saves a copy to Drive by default.",
+      parameters: {
+        type: "object",
+        properties: {
+          message_id: { type: "string", description: "The email's ID, from read_emails" },
+          attachment_filename: { type: "string", description: "Which attachment to read, if the email has more than one. Optional if there's only one." },
+          save_to_drive: { type: "boolean", description: "Save a copy to Google Drive (default true). Set false only if the user says not to." },
+        },
+        required: ["message_id"],
       },
     },
   },
@@ -139,6 +156,7 @@ async function executeGoogleTool(name, args) {
   switch (name) {
     case "send_email":          return await sendEmail(args);
     case "read_emails":         return await readEmails(args);
+    case "read_email_attachment": return await readEmailAttachment(args);
     case "upload_to_drive":     return await uploadToDrive(args);
     case "list_drive_files":    return await listDriveFiles(args);
     case "read_drive_file":     return await readDriveFile(args);
@@ -205,6 +223,13 @@ async function sendEmail({ to, subject, body, attachment_filename }) {
   return `Email sent to ${to} with subject "${subject}"${attachment_filename ? ` and attachment ${attachment_filename}` : ""}`;
 }
 
+function findAttachmentParts(part, out = []) {
+  if (!part) return out;
+  if (part.filename && part.body?.attachmentId) out.push(part);
+  for (const child of part.parts || []) findAttachmentParts(child, out);
+  return out;
+}
+
 async function readEmails({ query, max_results = 5 }) {
   const gmail = getGmail();
 
@@ -225,10 +250,53 @@ async function readEmails({ query, max_results = 5 }) {
     const subject = headers.find((h) => h.name === "Subject")?.value || "No subject";
     const date = headers.find((h) => h.name === "Date")?.value || "";
     const snippet = detail.data.snippet || "";
-    results.push(`From: ${from}\nDate: ${date}\nSubject: ${subject}\nPreview: ${snippet}`);
+    const attachments = findAttachmentParts(detail.data.payload).map((p) => p.filename);
+
+    let entry = `ID: ${msg.id}\nFrom: ${from}\nDate: ${date}\nSubject: ${subject}\nPreview: ${snippet}`;
+    if (attachments.length) entry += `\nAttachments: ${attachments.join(", ")} (use read_email_attachment with this ID to read one)`;
+    results.push(entry);
   }
 
   return results.join("\n\n---\n\n");
+}
+
+async function readEmailAttachment({ message_id, attachment_filename, save_to_drive = true }) {
+  const gmail = getGmail();
+
+  const detail = await gmail.users.messages.get({ userId: "me", id: message_id, format: "full" });
+  const parts = findAttachmentParts(detail.data.payload);
+  if (!parts.length) return `No attachments found on message ${message_id}.`;
+
+  const part = attachment_filename
+    ? parts.find((p) => p.filename === attachment_filename)
+    : parts[0];
+  if (!part) return `Attachment "${attachment_filename}" not found. Available: ${parts.map((p) => p.filename).join(", ")}`;
+
+  const attachment = await gmail.users.messages.attachments.get({
+    userId: "me",
+    messageId: message_id,
+    id: part.body.attachmentId,
+  });
+
+  const buffer = Buffer.from(attachment.data.data, "base64url");
+  const safeName = path.basename(part.filename);
+  const filePath = path.join(WORK_DIR, safeName);
+  fs.writeFileSync(filePath, buffer);
+
+  const text = await extractTextFromFile(filePath);
+  let result = `Saved "${safeName}" to workspace.`;
+
+  if (save_to_drive) {
+    try {
+      const driveResult = await uploadToDrive({ filename: safeName });
+      const linkMatch = driveResult.match(/https:\/\/[^\s]+/);
+      result += linkMatch ? ` Also saved to Drive: ${linkMatch[0]}` : ` Drive upload failed: ${driveResult}`;
+    } catch (err) {
+      result += ` Drive upload failed: ${err.message}`;
+    }
+  }
+
+  return `${result}\n\n${text}`;
 }
 
 // ── Google Drive ──────────────────────────────────────────────────────────────

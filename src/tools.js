@@ -3,6 +3,7 @@ const { execFileSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { extractTextFromFile } = require("./file-extract");
 
 const WORK_DIR = path.join(__dirname, "../workspace");
 if (!fs.existsSync(WORK_DIR)) fs.mkdirSync(WORK_DIR, { recursive: true });
@@ -309,24 +310,7 @@ async function readUploadedFile(filename) {
   const safeName = path.basename(filename);
   const filePath = path.join(WORK_DIR, safeName);
   if (!fs.existsSync(filePath)) return `File not found: ${safeName}`;
-
-  const ext = path.extname(safeName).toLowerCase();
-
-  if (ext === ".pdf") {
-    const pdfParse = require("pdf-parse");
-    const buffer = fs.readFileSync(filePath);
-    const data = await pdfParse(buffer);
-    return data.text.slice(0, 10000);
-  }
-
-  if (ext === ".docx" || ext === ".doc") {
-    const mammoth = require("mammoth");
-    const result = await mammoth.extractRawText({ path: filePath });
-    return result.value.slice(0, 10000);
-  }
-
-  // Plain text fallback
-  return fs.readFileSync(filePath, "utf8").slice(0, 10000);
+  return extractTextFromFile(filePath);
 }
 
 // ── Stock price ───────────────────────────────────────────────────────────────
