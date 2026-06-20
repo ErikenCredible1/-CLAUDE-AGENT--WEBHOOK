@@ -94,7 +94,7 @@ function getSystemPrompt(memoryBlock = null) {
   return `You are a powerful personal AI agent running on Telegram.
 Today's date is ${today}. Always use this date when the user asks about current news, prices, or events. Never say information is unavailable because of a knowledge cutoff — use your web_search tool to find current information instead.
 ${memorySection}
-You can do real work, not just answer questions. For complex tasks, call plan_task first, then execute each step.
+You can do real work, not just answer questions. For complex/multi-step tasks: call plan_task first, then autonomously execute every step yourself using your tools, one after another in this same turn, with NO pause and NO check-in message between steps. Only reply to the user once the entire task is complete (or if you hit something that genuinely requires their input to proceed) — never stop after just the first step.
 
 MEMORY: remember saves a personal fact permanently; recall lists what you know; forget_fact deletes one.
 
@@ -133,34 +133,36 @@ TOP PICKS
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Runs agentLoop with tiered recovery: a transient provider error (rate-limit,
-// malformed upstream response, gateway timeout) should not cost the user their
-// conversation history — only clear history once a same-history retry also fails.
+// Runs agentLoop with tiered recovery. Confirmed via production logs that the
+// recurring 400 ("Unterminated string...") from tencent/hy3-preview's only two
+// providers (GMICloud, SiliconFlow) is NOT history-dependent -- it still fails
+// identically on a freshly-cleared history. So clearing history buys nothing
+// for this failure mode while costing the user their whole conversation, which
+// is exactly what was reported as "it's forgetting what we were working on."
+// Retry the SAME history several times (this intermittent bug often clears up
+// on its own within a few attempts) and never auto-clear -- only an explicit
+// user "clear"/"forget" command (isClearCommand) wipes history now.
+const RETRY_ATTEMPTS = 4;
+
 async function runAgentLoopWithRecovery(userId, history, userMsg, onProgress, memoryBlock) {
-  try {
-    return await agentLoop(userId, history, onProgress, memoryBlock);
-  } catch (err) {
-    const isRateLimited = err.message.includes("(429)");
-    const isRetryable = isRateLimited || err.message.includes("(400)") || err.message.includes("(422)") || err.message.includes("(504)");
-    if (!isRetryable) throw err;
-
-    console.warn(`[recovery] LLM error for ${userId}: ${err.message} — retrying once with same history`);
-    if (isRateLimited) await sleep(3000);
-
+  let lastErr;
+  for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
     try {
       return await agentLoop(userId, history, onProgress, memoryBlock);
-    } catch (err2) {
-      console.warn(`[recovery] retry also failed for ${userId}: ${err2.message} — clearing history as last resort`);
-      await clearHistory(userId);
-      await saveMessage(userId, userMsg);
-      try {
-        return await agentLoop(userId, [userMsg], onProgress, memoryBlock);
-      } catch (err3) {
-        console.error(`[recovery] still failing after history clear for ${userId}: ${err3.message}`);
-        return "Sorry — I'm having trouble reaching the AI model right now (upstream rate-limit or a temporary error). Please try again in a minute.";
-      }
+    } catch (err) {
+      const isRateLimited = err.message.includes("(429)");
+      const isRetryable = isRateLimited || err.message.includes("(400)") || err.message.includes("(422)") || err.message.includes("(504)");
+      if (!isRetryable) throw err;
+
+      lastErr = err;
+      if (attempt === RETRY_ATTEMPTS) break;
+      console.warn(`[recovery] LLM error for ${userId} (attempt ${attempt}/${RETRY_ATTEMPTS}): ${err.message} — retrying with same history`);
+      await sleep(isRateLimited ? 3000 : 1500);
     }
   }
+
+  console.error(`[recovery] still failing after ${RETRY_ATTEMPTS} attempts for ${userId}: ${lastErr.message}`);
+  return "Sorry — I'm having trouble reaching the AI model right now (upstream rate-limit or a temporary error). Your conversation history is untouched — please try again in a minute.";
 }
 
 async function runAgent(userId, userInput, onProgress) {
