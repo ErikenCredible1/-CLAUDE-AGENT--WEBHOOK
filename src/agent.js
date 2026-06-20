@@ -339,6 +339,23 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
   }
 }
 
+// Diagnostic only -- summarizes message/argument sizes (never full content) so
+// a failing request's shape is visible in logs without dumping potentially
+// huge or sensitive content. Aimed at finding what triggers the recurring
+// "Unterminated string" 400 -- likely a tool call with a very large argument
+// (e.g. run_js code embedding raw data inline) the same way create_pdf's
+// content argument used to.
+function summarizeOutgoingMessages(messages) {
+  return messages.slice(-6).map((m) => {
+    const contentLen = typeof m.content === "string" ? m.content.length : JSON.stringify(m.content || "").length;
+    const toolCalls = (m.tool_calls || []).map((tc) => ({
+      name: tc.function?.name,
+      argsLen: (tc.function?.arguments || "").length,
+    }));
+    return { role: m.role, contentLen, toolCalls: toolCalls.length ? toolCalls : undefined };
+  });
+}
+
 async function callLLM(messages, tools) {
   const model = process.env.OPENROUTER_MODEL || "tencent/hy3-preview";
   let res;
@@ -360,6 +377,7 @@ async function callLLM(messages, tools) {
     const body = err.response?.data;
     const rawBody = body !== undefined ? JSON.stringify(body) : err.message;
     console.error(`[callLLM] HTTP error ${err.response?.status} — full response body:`, rawBody);
+    console.error(`[callLLM] outgoing request shape:`, summarizeOutgoingMessages(messages));
     const detail = body?.error?.message || rawBody;
     throw new Error(`LLM request failed (${err.response?.status}): ${detail}`);
   }
@@ -367,10 +385,12 @@ async function callLLM(messages, tools) {
   const data = res.data;
   if (data.error) {
     console.error("[callLLM] API error — full response body:", JSON.stringify(data));
+    console.error(`[callLLM] outgoing request shape:`, summarizeOutgoingMessages(messages));
     throw new Error(`OpenRouter error: ${JSON.stringify(data.error)}`);
   }
   if (!data.choices || data.choices.length === 0) {
     console.error("[callLLM] No choices in response — full response body:", JSON.stringify(data));
+    console.error(`[callLLM] outgoing request shape:`, summarizeOutgoingMessages(messages));
     throw new Error(`No response from model. Raw: ${JSON.stringify(data).slice(0, 300)}`);
   }
 

@@ -29,11 +29,11 @@ const TOOL_DEFINITIONS = [
     type: "function",
     function: {
       name: "run_js",
-      description: "Execute JavaScript (Node.js) code and return stdout.",
+      description: "Execute JavaScript (Node.js) code and return stdout. If you need to process a large amount of data (e.g. months of price history), write it to a file first (write_file/filesystem tools) and have this code read it from disk -- do not embed large data literals directly in the code string, that can break the request.",
       parameters: {
         type: "object",
         properties: {
-          code: { type: "string", description: "Node.js code to execute" },
+          code: { type: "string", description: "Node.js code to execute. Keep this short -- read any large input data from a file in the workspace instead of inlining it here." },
         },
         required: ["code"],
       },
