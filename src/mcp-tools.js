@@ -34,12 +34,6 @@ const MCP_SERVERS = [
     requiredEnv: [],
   },
   {
-    name: "brave-search",
-    command: path.join(BIN_DIR, "mcp-server-brave-search"),
-    args: [],
-    requiredEnv: ["BRAVE_API_KEY"],
-  },
-  {
     name: "airbnb",
     command: path.join(BIN_DIR, "mcp-server-airbnb"),
     args: [],

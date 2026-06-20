@@ -10,7 +10,6 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@modelcontextprotocol/server-brave-search": "^0.6.2",
     "@modelcontextprotocol/server-filesystem": "^2026.1.14",
     "@modelcontextprotocol/server-google-maps": "^0.6.2",
     "@modelcontextprotocol/server-sequential-thinking": "^2025.12.18",
