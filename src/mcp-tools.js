@@ -66,6 +66,21 @@ const MCP_SERVERS = [
     // startOneServer's try/catch already isolates failures from the rest of
     // the app, same as every other server here.
   },
+  {
+    name: "flights",
+    command: path.join(BIN_DIR, "google-flights-mcp-server"),
+    args: [],
+    requiredEnv: [],
+    // Talks to Google Flights' own backend protobuf API directly -- no
+    // browser, no API key, no scraping. This is what real flight search
+    // (search_flights, get_date_grid, find_airport_code) ended up being,
+    // after Lightpanda failed on every aggregator/airline site tried
+    // (Kayak crash-looped on a WASM JS exception, Skyscanner CAPTCHA-walled
+    // immediately, Google Flights/United hit missing-API/compatibility
+    // walls) -- sidesteps all of that since there's no browser rendering
+    // involved at all, just a direct API call the same way the real site
+    // makes internally.
+  },
 ];
 
 const mcpClients = new Map();   // serverName -> Client
