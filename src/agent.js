@@ -409,6 +409,22 @@ function summarizeOutgoingMessages(messages) {
   });
 }
 
+// Same idea as summarizeOutgoingMessages but for the `tools` payload (JSON
+// schemas) -- never diagnosed before now. Many of these come from third-party
+// MCP packages whose schema content/structure we don't control; if one has a
+// malformed description, pattern, or default value, this will catch it.
+function summarizeOutgoingTools(tools) {
+  return (tools || []).map((t) => {
+    const schemaStr = JSON.stringify(t);
+    return {
+      name: t.function?.name,
+      schemaLen: schemaStr.length,
+      suspicious: findSuspiciousChar(schemaStr),
+    };
+  }).filter((t) => t.suspicious) // only report ones with an actual finding -- avoid logging 40+ clean entries every time
+    .concat([{ totalTools: (tools || []).length }]);
+}
+
 async function callLLM(messages, tools) {
   const model = process.env.OPENROUTER_MODEL || "tencent/hy3-preview";
   let res;
@@ -431,6 +447,7 @@ async function callLLM(messages, tools) {
     const rawBody = body !== undefined ? JSON.stringify(body) : err.message;
     console.error(`[callLLM] HTTP error ${err.response?.status} — full response body:`, rawBody);
     console.error(`[callLLM] outgoing request shape:`, summarizeOutgoingMessages(messages));
+    console.error(`[callLLM] outgoing tools shape:`, summarizeOutgoingTools(tools));
     const detail = body?.error?.message || rawBody;
     throw new Error(`LLM request failed (${err.response?.status}): ${detail}`);
   }
@@ -439,11 +456,13 @@ async function callLLM(messages, tools) {
   if (data.error) {
     console.error("[callLLM] API error — full response body:", JSON.stringify(data));
     console.error(`[callLLM] outgoing request shape:`, summarizeOutgoingMessages(messages));
+    console.error(`[callLLM] outgoing tools shape:`, summarizeOutgoingTools(tools));
     throw new Error(`OpenRouter error: ${JSON.stringify(data.error)}`);
   }
   if (!data.choices || data.choices.length === 0) {
     console.error("[callLLM] No choices in response — full response body:", JSON.stringify(data));
     console.error(`[callLLM] outgoing request shape:`, summarizeOutgoingMessages(messages));
+    console.error(`[callLLM] outgoing tools shape:`, summarizeOutgoingTools(tools));
     throw new Error(`No response from model. Raw: ${JSON.stringify(data).slice(0, 300)}`);
   }
 
