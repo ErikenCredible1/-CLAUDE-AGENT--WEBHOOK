@@ -40,12 +40,6 @@ const MCP_SERVERS = [
     requiredEnv: [],
   },
   {
-    name: "google-maps",
-    command: path.join(BIN_DIR, "mcp-server-google-maps"),
-    args: [],
-    requiredEnv: ["GOOGLE_MAPS_API_KEY"],
-  },
-  {
     name: "firecrawl",
     command: path.join(BIN_DIR, "firecrawl-mcp"),
     args: [],
