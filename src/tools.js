@@ -174,15 +174,15 @@ const TOOL_DEFINITIONS = [
     type: "function",
     function: {
       name: "create_pdf",
-      description: "Generate a PDF from text content and return a download link. Use when the user asks for a PDF, document, or report they can download.",
+      description: "Generate a PDF and return a download link. Use when the user asks for a PDF, document, or report they can download. For long reports, write the full report as your normal reply text first, then call this tool with just filename and title — your reply text automatically becomes the PDF body. Only pass content directly for short notes.",
       parameters: {
         type: "object",
         properties: {
           filename: { type: "string", description: "PDF filename without extension e.g. 'report'" },
           title: { type: "string", description: "Document title shown at top of PDF" },
-          content: { type: "string", description: "Plain text content for the PDF. Use newlines to separate sections." },
+          content: { type: "string", description: "Plain text content for the PDF. Only needed for short content — omit it for long reports and write the report as your reply text instead." },
         },
-        required: ["filename", "title", "content"],
+        required: ["filename", "title"],
       },
     },
   },

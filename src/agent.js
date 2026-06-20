@@ -3,7 +3,48 @@ const { executeTool, TOOL_DEFINITIONS } = require("./tools");
 const { executeGoogleTool, GOOGLE_TOOL_DEFINITIONS } = require("./google-tools");
 const { loadHistory, saveMessage, clearHistory, saveFact, loadFacts, deleteFact, buildMemoryBlock } = require("./memory");
 
-const ALL_TOOL_DEFINITIONS = [...TOOL_DEFINITIONS, ...GOOGLE_TOOL_DEFINITIONS];
+// ── Lazy tool loading — see get_tool_schema below ──────────────────────────────
+// Full schemas cost ~15k tokens/request if all sent upfront. Instead the model
+// gets a lightweight name+description index in the system prompt, plus this one
+// real meta-tool. Calling it unlocks a tool's full schema for the rest of this turn.
+function buildToolRegistry() {
+  const all = [...TOOL_DEFINITIONS, ...GOOGLE_TOOL_DEFINITIONS];
+  const map = new Map();
+  for (const def of all) map.set(def.function.name, def);
+  return map;
+}
+
+const TOOL_REGISTRY = buildToolRegistry();
+
+const GET_TOOL_SCHEMA_DEFINITION = {
+  type: "function",
+  function: {
+    name: "get_tool_schema",
+    description: "Get the full parameter schema for a tool before calling it. Call this first whenever you intend to use a tool you haven't already unlocked this turn.",
+    parameters: {
+      type: "object",
+      properties: {
+        tool_name: { type: "string", description: "Exact tool name from the TOOLS AVAILABLE list, e.g. 'web_search', 'create_pdf', 'read_calendar'" },
+      },
+      required: ["tool_name"],
+    },
+  },
+};
+
+function buildToolIndexText() {
+  return [...TOOL_REGISTRY.values()]
+    .map((def) => `- ${def.function.name}: ${def.function.description}`)
+    .join("\n");
+}
+
+function buildToolsForRequest(unlockedTools) {
+  const tools = [GET_TOOL_SCHEMA_DEFINITION];
+  for (const name of unlockedTools) {
+    const def = TOOL_REGISTRY.get(name);
+    if (def) tools.push(def);
+  }
+  return tools;
+}
 
 // ── Per-user lock — prevents concurrent messages corrupting history ────────────
 const userLocks = new Map();
@@ -43,62 +84,20 @@ function getSystemPrompt(memoryBlock = null) {
   return `You are a powerful personal AI agent running on Telegram.
 Today's date is ${today}. Always use this date when the user asks about current news, prices, or events. Never say information is unavailable because of a knowledge cutoff — use your web_search tool to find current information instead.
 ${memorySection}
-You can do real work — not just answer questions. For any complex task, use plan_task first to break it into steps, then execute each step using your tools.
+You can do real work, not just answer questions. For complex tasks, call plan_task first, then execute each step.
 
-MEMORY INSTRUCTIONS:
-- When the user tells you something personal (name, location, preference, habit, important fact), use the remember tool to save it permanently
-- When asked "what do you know about me?" use the recall tool to list saved facts
-- When asked to forget something specific, use the forget tool
+MEMORY: remember saves a personal fact permanently; recall lists what you know; forget_fact deletes one.
 
-SCHEDULING:
-You CAN set up scheduled recurring tasks. When the user asks to schedule something (e.g. "every day at 9am send me a news summary", "every monday check my emails"), tell them to use this exact format:
-"every [timing] [action]"
-Examples:
-- "every day at 9am summarise the news"
-- "every monday check my calendar"
-- "every morning remind me to review my tasks"
-They can also say "list schedules" to see active ones, or "delete schedule [name]" to remove one.
+SCHEDULING: user can say "every [timing] [action]" (e.g. "every day at 9am summarise the news") to create a recurring task — pass it to create_schedule. "list schedules" / "delete schedule [name]" manage existing ones.
 
 TOOLS AVAILABLE:
-- web_search: search the internet for current info — always use this for anything time-sensitive
-- http_request: call any external API
-- run_js: execute Node.js code for calculations, data processing, formatting
-- read_file / write_file / list_files: manage files in your workspace
-- get_stock_price: real-time stock prices (e.g. AAPL, TSLA)
-- get_crypto_price: real-time crypto prices (e.g. bitcoin, ethereum)
-- set_price_alert: alert user when a stock/crypto hits a target price
-- read_uploaded_file: extract text from uploaded PDFs, Word docs, text files
-- create_pdf: generate a PDF from content and upload to Drive — always follow with upload_to_drive, then only send the user a short summary and the Drive link, never the full content
-- plan_task: break a complex task into steps before executing
-- remember: permanently save a fact about the user
-- recall: list all saved facts about the user
-- forget_fact: delete a specific saved fact
-- create_schedule: create a recurring scheduled task (e.g. every friday at 5pm, every monday at 8am)
-- list_schedules: list all active scheduled tasks
-- delete_schedule: delete a scheduled task by name
+You do not see full tool schemas upfront — call get_tool_schema with a tool's exact name to get its parameters before calling it for the first time this conversation turn. get_tool_schema itself needs no lookup.
 
-GOOGLE TOOLS:
-- send_email: send email from the agent's Gmail
-- read_emails: search and read emails in the agent's Gmail
-- upload_to_drive: upload a file to Google Drive and get a shareable link
-- list_drive_files: list files in Google Drive
-- read_drive_file: read and extract content from a file in Google Drive
-- create_calendar_event: create a calendar event
-- read_calendar: check upcoming calendar events
-- create_sheet: create a Google Sheet with data and get a shareable link
+${buildToolIndexText()}
 
-PDF BEHAVIOR:
-When creating a PDF, always:
-1. Create it with create_pdf (auto uploads to Drive)
-2. Send the user only: a 2-3 line summary of what the PDF contains + the Drive link
-Never send the full PDF content as a LINE message.
-For tasks like "research X and write a report", "compare A vs B", or "find the best Y":
-1. Call plan_task first to lay out the steps
-2. Execute each step using appropriate tools
-3. Synthesize results into a final clear answer
+PDF: create_pdf auto-uploads to Drive — reply with only a short summary + the Drive link, never the full content. For long reports, write the report as your normal reply text, then call create_pdf with just filename/title.
 
-IMAGE UNDERSTANDING:
-When the user sends an image, analyse it carefully and describe what you see. If asked to extract text, do so accurately. If asked about objects, people, charts, documents — describe them in detail.
+IMAGES: you receive a text description of any image the user sent (already analysed) under "[Image analysis]" — respond to it naturally as if you saw the image yourself.
 
 FORMATTING — THIS IS CRITICAL:
 Telegram does not render markdown in plain text mode. Never use markdown. Specifically:
@@ -115,18 +114,42 @@ Use clean plain text instead:
 - Emphasize with CAPS sparingly
 - Keep it concise — user is on mobile
 
-Example of good formatting:
+Example:
+🏆 TOP PICKS
+1. Option A — short reason
+2. Option B — short reason`;
+}
 
-🏆 TOP 3 LUXURY SUVS
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-1. Lexus GX 460 (2016-2020)
-Seats 7, bulletproof reliability, 8.0/10 score
+// Runs agentLoop with tiered recovery: a transient provider error (rate-limit,
+// malformed upstream response, gateway timeout) should not cost the user their
+// conversation history — only clear history once a same-history retry also fails.
+async function runAgentLoopWithRecovery(userId, history, userMsg, onProgress, memoryBlock) {
+  try {
+    return await agentLoop(userId, history, onProgress, memoryBlock);
+  } catch (err) {
+    const isRateLimited = err.message.includes("(429)");
+    const isRetryable = isRateLimited || err.message.includes("(400)") || err.message.includes("(422)") || err.message.includes("(504)");
+    if (!isRetryable) throw err;
 
-2. Lexus LX 570 (2016-2020)
-Seats 7-8, Land Cruiser platform, exceptional longevity
+    console.warn(`[recovery] LLM error for ${userId}: ${err.message} — retrying once with same history`);
+    if (isRateLimited) await sleep(3000);
 
-3. Acura MDX (2016-2020)
-Seats 7, best handling in class, strong resale value`;
+    try {
+      return await agentLoop(userId, history, onProgress, memoryBlock);
+    } catch (err2) {
+      console.warn(`[recovery] retry also failed for ${userId}: ${err2.message} — clearing history as last resort`);
+      await clearHistory(userId);
+      await saveMessage(userId, userMsg);
+      try {
+        return await agentLoop(userId, [userMsg], onProgress, memoryBlock);
+      } catch (err3) {
+        console.error(`[recovery] still failing after history clear for ${userId}: ${err3.message}`);
+        return "Sorry — I'm having trouble reaching the AI model right now (upstream rate-limit or a temporary error). Please try again in a minute.";
+      }
+    }
+  }
 }
 
 async function runAgent(userId, userInput, onProgress) {
@@ -142,49 +165,69 @@ async function runAgent(userId, userInput, onProgress) {
     history.push(userMsg);
     await saveMessage(userId, userMsg);
 
-    try {
-      return await agentLoop(userId, history, onProgress, memoryBlock);
-    } catch (err) {
-      // If the LLM rejected the request (likely corrupt history), auto-clear and retry once
-      if (err.message.includes("(400)") || err.message.includes("(422)")) {
-        console.warn(`[runAgent] LLM error for ${userId}, clearing history and retrying fresh`);
-        await clearHistory(userId);
-        await saveMessage(userId, userMsg);
-        return await agentLoop(userId, [userMsg], onProgress, memoryBlock);
-      }
-      throw err;
-    }
+    return runAgentLoopWithRecovery(userId, history, userMsg, onProgress, memoryBlock);
   });
+}
+
+// Vision is a separate preprocessing step, not the main tool-calling model:
+// describe the image with OPENROUTER_VISION_MODEL (no tools), then hand the
+// resulting text to the normal agentLoop running on OPENROUTER_MODEL.
+async function describeImage(imageBuffer, caption) {
+  const visionModel = process.env.OPENROUTER_VISION_MODEL;
+  if (!visionModel) return null;
+
+  const prompt = caption
+    ? `Describe this image in detail, then specifically address: ${caption}`
+    : "Describe this image in detail — objects, people, text, charts, documents, anything notable.";
+
+  try {
+    const res = await axios.post(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        model: visionModel,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBuffer.toString("base64")}` } },
+            { type: "text", text: prompt },
+          ],
+        }],
+        max_tokens: 800,
+      },
+      {
+        timeout: 60_000,
+        headers: {
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    return res.data?.choices?.[0]?.message?.content || null;
+  } catch (err) {
+    console.error(`[describeImage] vision call failed: ${err.response?.status} ${err.response?.data?.error?.message || err.message}`);
+    return null;
+  }
 }
 
 async function runAgentWithImage(userId, imageBuffer, caption, onProgress) {
   return withUserLock(userId, async () => {
-    const base64 = imageBuffer.toString("base64");
-    const userMsg = {
-      role: "user",
-      content: [
-        { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64}` } },
-        { type: "text", text: caption || "What is in this image? Describe it in detail." },
-      ],
-    };
+    const description = await describeImage(imageBuffer, caption);
+
+    const mergedText = description
+      ? `[Image analysis]\n${description}${caption ? `\n\n[User's message with the image]\n${caption}` : ""}`
+      : caption
+        ? `${caption}\n\n[Note: the attached image could not be analysed]`
+        : "[User sent an image, but it could not be analysed]";
+
+    const userMsg = { role: "user", content: mergedText };
 
     let history = await loadHistory(userId);
     history.push(userMsg);
-    await saveMessage(userId, { role: "user", content: caption || "[Image sent by user]" });
+    await saveMessage(userId, userMsg);
 
     const memoryBlock = await buildMemoryBlock(userId);
 
-    try {
-      return await agentLoop(userId, history, onProgress, memoryBlock);
-    } catch (err) {
-      if (err.message.includes("(400)") || err.message.includes("(422)")) {
-        console.warn(`[runAgentWithImage] LLM error for ${userId}, retrying fresh`);
-        await clearHistory(userId);
-        await saveMessage(userId, { role: "user", content: caption || "[Image sent by user]" });
-        return await agentLoop(userId, [userMsg], onProgress, memoryBlock);
-      }
-      throw err;
-    }
+    return runAgentLoopWithRecovery(userId, history, userMsg, onProgress, memoryBlock);
   });
 }
 
@@ -196,9 +239,10 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
 
   const MAX_TOOL_CALLS = 20;
   let toolCallCount = 0;
+  const unlockedTools = new Set(); // tools whose full schema was requested this turn — resets every call
 
   while (true) {
-    const response = await callLLM(messages);
+    const response = await callLLM(messages, buildToolsForRequest(unlockedTools));
     const choice = response.choices[0];
 
     // Strip reasoning fields and normalize null content
@@ -232,8 +276,34 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
 
       let toolResult;
       try {
-        const googleResult = await executeGoogleTool(toolName, toolArgs);
-        toolResult = googleResult !== null ? googleResult : await executeTool(toolName, toolArgs, userId);
+        if (toolName === "get_tool_schema") {
+          const def = TOOL_REGISTRY.get(toolArgs.tool_name);
+          if (!def) {
+            toolResult = `Unknown tool "${toolArgs.tool_name}". Check the TOOLS AVAILABLE list for exact names.`;
+          } else {
+            unlockedTools.add(toolArgs.tool_name);
+            toolResult = JSON.stringify(def.function);
+          }
+        } else {
+          // Defensive: if the model called a real tool directly without unlocking
+          // it first, treat it as unlocked anyway — the schema already "leaked"
+          // into this tool_call, so erroring here would only add a wasted round trip.
+          unlockedTools.add(toolName);
+
+          // create_pdf's content can be long enough to trip up the model's own
+          // tool-call JSON generation — let the model write the report as normal
+          // reply text instead, and use that as the PDF body when content is omitted.
+          if (toolName === "create_pdf" && !toolArgs.content) {
+            toolArgs.content = assistantMsg.content || "";
+          }
+
+          if (toolName === "create_pdf" && !toolArgs.content) {
+            toolResult = "Tool error: no content provided. Write the report as your reply text, then call create_pdf again with just filename and title.";
+          } else {
+            const googleResult = await executeGoogleTool(toolName, toolArgs);
+            toolResult = googleResult !== null ? googleResult : await executeTool(toolName, toolArgs, userId);
+          }
+        }
       } catch (err) {
         toolResult = `Tool error: ${err.message}`;
       }
@@ -251,13 +321,13 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
   }
 }
 
-async function callLLM(messages) {
+async function callLLM(messages, tools) {
   const model = process.env.OPENROUTER_MODEL || "tencent/hy3-preview";
   let res;
   try {
     res = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
-      { model, messages, tools: ALL_TOOL_DEFINITIONS, max_tokens: 2048 },
+      { model, messages, tools, max_tokens: 2048 },
       {
         timeout: 90_000, // 90s — prevents hanging forever if provider is slow
         headers: {
@@ -291,6 +361,7 @@ async function callLLM(messages) {
 
 function describeToolCall(name, args) {
   switch (name) {
+    case "get_tool_schema":         return `Looking up how to use ${args.tool_name}...`;
     case "web_search":             return `Searching: "${args.query}"`;
     case "run_js":                 return `Running code...`;
     case "http_request":           return `Fetching ${args.url}`;

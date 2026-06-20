@@ -13,9 +13,9 @@ function getRedis() {
   return redis;
 }
 
-const HISTORY_LIMIT = 20;
+const HISTORY_LIMIT = 15;
 const HISTORY_MAX   = 100;
-const SUMMARY_TRIGGER = 40;
+const SUMMARY_TRIGGER = 20;
 
 // ── Message sanitization ──────────────────────────────────────────────────────
 
