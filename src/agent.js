@@ -61,6 +61,10 @@ function buildToolsForRequest(unlockedTools) {
 const userLocks = new Map();
 const LOCK_TIMEOUT_MS = 120_000; // 2 min max per request before releasing lock
 
+function isUserBusy(userId) {
+  return userLocks.has(userId);
+}
+
 async function withUserLock(userId, fn) {
   while (userLocks.has(userId)) {
     await Promise.race([
@@ -77,6 +81,22 @@ async function withUserLock(userId, fn) {
     userLocks.delete(userId);
     resolve();
   }
+}
+
+// ── Mid-task pause — checked between tool-call rounds in agentLoop ───────────
+// A "pause" message arrives while a task is already running, so it can't go
+// through the normal locked runAgent() flow (it would just queue behind the
+// in-progress task). server.js intercepts it and calls requestPause() directly.
+const pauseRequested = new Map();
+
+function requestPause(userId) {
+  pauseRequested.set(userId, true);
+}
+
+function isPauseRequested(userId) {
+  if (!pauseRequested.get(userId)) return false;
+  pauseRequested.delete(userId);
+  return true;
 }
 
 // ── Clear-command detection — accept common variants ─────────────────────────
@@ -276,6 +296,10 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
       return assistantMsg.content || "I reached the maximum number of steps for this task. Please try breaking it into smaller requests.";
     }
 
+    if (isPauseRequested(userId)) {
+      return "⏸️ Paused. What would you like to do next? (Everything done so far is saved — just tell me how to continue, or give me something new.)";
+    }
+
     for (const toolCall of assistantMsg.tool_calls) {
       toolCallCount++;
       const toolName = toolCall.function.name;
@@ -346,14 +370,42 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
 // "Unterminated string" 400 -- likely a tool call with a very large argument
 // (e.g. run_js code embedding raw data inline) the same way create_pdf's
 // content argument used to.
+// Scans for lone surrogates (half of a split emoji/multi-byte pair) and raw
+// control characters (excluding \t\n\r) -- both are invalid/unusual in a JSON
+// string value and plausible causes of an upstream parser choking. Returns a
+// short, position-anchored snippet rather than dumping the full string.
+function findSuspiciousChar(str) {
+  if (typeof str !== "string") return null;
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    const isLoneHighSurrogate = code >= 0xd800 && code <= 0xdbff && !(str.charCodeAt(i + 1) >= 0xdc00 && str.charCodeAt(i + 1) <= 0xdfff);
+    const isLoneLowSurrogate = code >= 0xdc00 && code <= 0xdfff && !(str.charCodeAt(i - 1) >= 0xd800 && str.charCodeAt(i - 1) <= 0xdbff);
+    const isControlChar = code < 0x20 && code !== 9 && code !== 10 && code !== 13;
+    if (isLoneHighSurrogate || isLoneLowSurrogate || isControlChar) {
+      return {
+        type: isControlChar ? "control-char" : "lone-surrogate",
+        codePoint: "0x" + code.toString(16),
+        position: i,
+        context: JSON.stringify(str.slice(Math.max(0, i - 15), i + 15)),
+      };
+    }
+  }
+  return null;
+}
+
 function summarizeOutgoingMessages(messages) {
   return messages.slice(-6).map((m) => {
-    const contentLen = typeof m.content === "string" ? m.content.length : JSON.stringify(m.content || "").length;
-    const toolCalls = (m.tool_calls || []).map((tc) => ({
-      name: tc.function?.name,
-      argsLen: (tc.function?.arguments || "").length,
-    }));
-    return { role: m.role, contentLen, toolCalls: toolCalls.length ? toolCalls : undefined };
+    const contentStr = typeof m.content === "string" ? m.content : JSON.stringify(m.content || "");
+    const toolCalls = (m.tool_calls || []).map((tc) => {
+      const args = tc.function?.arguments || "";
+      return { name: tc.function?.name, argsLen: args.length, suspicious: findSuspiciousChar(args) };
+    });
+    return {
+      role: m.role,
+      contentLen: contentStr.length,
+      suspicious: findSuspiciousChar(contentStr),
+      toolCalls: toolCalls.length ? toolCalls : undefined,
+    };
   });
 }
 
@@ -436,4 +488,4 @@ function describeToolCall(name, args) {
   }
 }
 
-module.exports = { runAgent, runAgentWithImage, refreshToolRegistry };
+module.exports = { runAgent, runAgentWithImage, refreshToolRegistry, isUserBusy, requestPause };

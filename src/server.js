@@ -4,7 +4,7 @@ const { Telegraf } = require("telegraf");
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
-const { runAgent, runAgentWithImage, refreshToolRegistry } = require("./agent");
+const { runAgent, runAgentWithImage, refreshToolRegistry, isUserBusy, requestPause } = require("./agent");
 const { createSchedule, listSchedules, deleteSchedule, parseScheduleRequest } = require("./scheduler");
 const { checkPriceAlerts } = require("./alerts");
 const { startMcpServers } = require("./mcp-tools");
@@ -75,6 +75,16 @@ bot.on("document", async (ctx) => {
 bot.on("text", async (ctx) => {
   const userId = String(ctx.chat.id);
   const text = ctx.message.text.trim();
+
+  // Pause — must intercept before the normal locked flow, otherwise it would
+  // just queue behind the in-progress task instead of interrupting it.
+  if (/^(pause|stop|hold on|wait)$/i.test(text)) {
+    if (isUserBusy(userId)) {
+      requestPause(userId);
+      return send(userId, "⏸️ Pausing after the current step...");
+    }
+    return send(userId, "Nothing in progress to pause.");
+  }
 
   // Schedule commands
   if (/^(list schedules?|my schedules?)$/i.test(text)) {
