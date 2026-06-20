@@ -3,57 +3,64 @@ const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
 const { StdioClientTransport } = require("@modelcontextprotocol/sdk/client/stdio.js");
 
 const WORK_DIR = path.join(__dirname, "../workspace");
+const BIN_DIR = path.join(__dirname, "../node_modules/.bin");
 
+// Servers are real package.json dependencies (resolved once at build time),
+// spawned via their already-installed local bin -- not `npx`. On Render's
+// free tier, npx's runtime package-resolution + download was slow enough that
+// 4 servers starting at once all hit the SDK's request timeout (CPU-starved
+// free-tier instance); a local binary spawn needs no network call at all.
+//
 // Lightweight/network-bound MCP servers only — Playwright MCP needs browser
 // binaries (~200MB+ disk, 1GB+ RAM) and is not viable on Render's free tier.
 // Kiwi.com has no standalone npm package (hosted/connector-only) — deferred.
 const MCP_SERVERS = [
   {
     name: "filesystem",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-filesystem", WORK_DIR],
+    command: path.join(BIN_DIR, "mcp-server-filesystem"),
+    args: [WORK_DIR],
     requiredEnv: [],
   },
   {
     name: "sequential-thinking",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+    command: path.join(BIN_DIR, "mcp-server-sequential-thinking"),
+    args: [],
     requiredEnv: [],
   },
   {
     name: "fetch",
-    command: "npx",
-    args: ["-y", "mcp-fetch-server"], // also covers YouTube transcripts (fetch_youtube_transcript)
+    command: path.join(BIN_DIR, "mcp-fetch-server"), // also covers YouTube transcripts (fetch_youtube_transcript)
+    args: [],
     requiredEnv: [],
   },
   {
     name: "brave-search",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-brave-search"],
+    command: path.join(BIN_DIR, "mcp-server-brave-search"),
+    args: [],
     requiredEnv: ["BRAVE_API_KEY"],
   },
   {
     name: "airbnb",
-    command: "npx",
-    args: ["-y", "@openbnb/mcp-server-airbnb"],
+    command: path.join(BIN_DIR, "mcp-server-airbnb"),
+    args: [],
     requiredEnv: [],
   },
   {
     name: "google-maps",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-google-maps"],
+    command: path.join(BIN_DIR, "mcp-server-google-maps"),
+    args: [],
     requiredEnv: ["GOOGLE_MAPS_API_KEY"],
   },
   {
     name: "firecrawl",
-    command: "npx",
-    args: ["-y", "firecrawl-mcp"],
+    command: path.join(BIN_DIR, "firecrawl-mcp"),
+    args: [],
     requiredEnv: ["FIRECRAWL_API_KEY"],
   },
   {
     name: "notion",
-    command: "npx",
-    args: ["-y", "@notionhq/notion-mcp-server"],
+    command: path.join(BIN_DIR, "notion-mcp-server"),
+    args: [],
     requiredEnv: ["NOTION_TOKEN"],
   },
 ];
