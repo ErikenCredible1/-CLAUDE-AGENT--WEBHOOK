@@ -3,6 +3,7 @@ const { executeTool, TOOL_DEFINITIONS } = require("./tools");
 const { executeGoogleTool, GOOGLE_TOOL_DEFINITIONS } = require("./google-tools");
 const { executeMcpTool, getMcpToolDefinitions } = require("./mcp-tools");
 const { loadHistory, saveMessage, clearHistory, saveFact, loadFacts, deleteFact, buildMemoryBlock } = require("./memory");
+const { safeSlice } = require("./safe-slice");
 
 // ── Lazy tool loading — see get_tool_schema below ──────────────────────────────
 // Full schemas cost ~15k tokens/request if all sent upfront. Instead the model
@@ -329,7 +330,7 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
       const toolResultMsg = {
         role: "tool",
         tool_call_id: toolCall.id,
-        content: String(toolResult).slice(0, 8000),
+        content: safeSlice(String(toolResult), 8000),
       };
 
       messages.push(toolResultMsg);

@@ -1,6 +1,7 @@
 const path = require("path");
 const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
 const { StdioClientTransport } = require("@modelcontextprotocol/sdk/client/stdio.js");
+const { safeSlice } = require("./safe-slice");
 
 const WORK_DIR = path.join(__dirname, "../workspace");
 const BIN_DIR = path.join(__dirname, "../node_modules/.bin");
@@ -145,7 +146,7 @@ async function executeMcpTool(name, args) {
       .filter((c) => c.type === "text")
       .map((c) => c.text)
       .join("\n");
-    return (text || JSON.stringify(result)).slice(0, 8000);
+    return safeSlice(text || JSON.stringify(result), 8000);
   } catch (err) {
     return `MCP tool error (${name}): ${err.message}`;
   }

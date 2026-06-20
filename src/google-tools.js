@@ -3,6 +3,7 @@ const path = require("path");
 const { Readable } = require("stream");
 const { getDrive, getGmail, getCalendar, getSheets } = require("./google");
 const { extractTextFromFile } = require("./file-extract");
+const { safeSlice } = require("./safe-slice");
 
 const WORK_DIR = path.join(__dirname, "../workspace");
 
@@ -397,13 +398,13 @@ async function readDriveFile({ filename }) {
   // Export Google Docs as plain text
   if (file.mimeType === "application/vnd.google-apps.document") {
     const exported = await drive.files.export({ fileId: file.id, mimeType: "text/plain" }, { responseType: "text" });
-    return String(exported.data).slice(0, 10000);
+    return safeSlice(String(exported.data), 10000);
   }
 
   // Export Google Sheets as CSV
   if (file.mimeType === "application/vnd.google-apps.spreadsheet") {
     const exported = await drive.files.export({ fileId: file.id, mimeType: "text/csv" }, { responseType: "text" });
-    return String(exported.data).slice(0, 10000);
+    return safeSlice(String(exported.data), 10000);
   }
 
   // Download other files
@@ -416,14 +417,14 @@ async function readDriveFile({ filename }) {
     const parser = new PDFParse({ data: buffer });
     try {
       const result = await parser.getText();
-      return result.text.slice(0, 10000);
+      return safeSlice(result.text, 10000);
     } finally {
       await parser.destroy();
     }
   }
 
   // Plain text
-  return buffer.toString("utf8").slice(0, 10000);
+  return safeSlice(buffer.toString("utf8"), 10000);
 }
 
 // ── Google Calendar ───────────────────────────────────────────────────────────
