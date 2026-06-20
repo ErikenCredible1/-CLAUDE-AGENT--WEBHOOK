@@ -1,17 +1,6 @@
 const { google } = require("googleapis");
 
-// Service account auth — never expires (used for Drive and Sheets)
-function getServiceAccountAuth(scopes) {
-  if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-    throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is not set in environment variables.");
-  }
-  return new google.auth.GoogleAuth({
-    credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
-    scopes,
-  });
-}
-
-// OAuth2 auth — used for Gmail and Calendar (personal account access)
+// OAuth2 auth — used for Gmail, Calendar, Drive, and Sheets (personal account access)
 function getAuth() {
   if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET || !process.env.GOOGLE_REFRESH_TOKEN) {
     throw new Error(
@@ -48,25 +37,18 @@ function getAuth() {
   return oauth2Client;
 }
 
-// Drive and Sheets use service account (never expires)
+// Drive and Sheets use OAuth, not a service account -- service accounts have
+// zero storage quota on personal (non-Workspace) Google accounts and cannot
+// create new files at all ("Service Accounts do not have storage quota"),
+// even though reads/lists on already-shared folders appeared to work fine.
 function getDrive() {
-  return google.drive({
-    version: "v3",
-    auth: getServiceAccountAuth(["https://www.googleapis.com/auth/drive"]),
-  });
+  return google.drive({ version: "v3", auth: getAuth() });
 }
 
 function getSheets() {
-  return google.sheets({
-    version: "v4",
-    auth: getServiceAccountAuth([
-      "https://www.googleapis.com/auth/spreadsheets",
-      "https://www.googleapis.com/auth/drive",
-    ]),
-  });
+  return google.sheets({ version: "v4", auth: getAuth() });
 }
 
-// Gmail and Calendar use OAuth (personal account)
 function getGmail() {
   return google.gmail({ version: "v1", auth: getAuth() });
 }
