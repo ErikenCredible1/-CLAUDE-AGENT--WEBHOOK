@@ -29,13 +29,27 @@ const TOOL_DEFINITIONS = [
     type: "function",
     function: {
       name: "run_js",
-      description: "Execute JavaScript (Node.js) code and return stdout. If you need to process a large amount of data (e.g. months of price history), write it to a file first (write_file/filesystem tools) and have this code read it from disk -- do not embed large data literals directly in the code string, that can break the request.",
+      description: "Execute a short JavaScript (Node.js) one-liner/snippet directly and return stdout. Only for trivial code (a quick calculation, a few lines). For anything substantial -- data processing, multi-step logic, comparisons, anything beyond ~5 lines -- use write_and_run_js instead, which is much more reliable.",
       parameters: {
         type: "object",
         properties: {
-          code: { type: "string", description: "Node.js code to execute. Keep this short -- read any large input data from a file in the workspace instead of inlining it here." },
+          code: { type: "string", description: "Short Node.js code to execute." },
         },
         required: ["code"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "write_and_run_js",
+      description: "Describe a coding task in plain English and a separate code-specialist model writes and runs the JavaScript for you, returning the output. Use this instead of run_js for any real code -- data processing, calculations over fetched data, multi-step logic, anything beyond a trivial one-liner.",
+      parameters: {
+        type: "object",
+        properties: {
+          task: { type: "string", description: "Plain-English description of what the code should do, e.g. 'fetch 6 months of daily closing prices for AAPL and TSLA and compute the correlation coefficient'" },
+        },
+        required: ["task"],
       },
     },
   },
@@ -216,6 +230,7 @@ async function executeTool(name, args, userId = "default") {
   switch (name) {
     case "web_search":        return await webSearch(args.query);
     case "run_js":            return runJs(args.code);
+    case "write_and_run_js":  return await writeAndRunJs(args.task);
     case "get_stock_price":   return await getStockPrice(args.symbol);
     case "get_crypto_price":  return await getCryptoPrice(args.coin);
     case "set_price_alert":   return await setPriceAlert(args.symbol, args.type, args.condition, args.target);
@@ -303,6 +318,58 @@ function runJs(code) {
   } finally {
     try { fs.unlinkSync(tmpFile); } catch {}
   }
+}
+
+// Delegates actual code generation to a separate model as a plain text
+// completion -- the main agent model only has to pass a short natural-
+// language task description as its tool argument, never a long escape-heavy
+// code string. Sidesteps a suspected bug where the main model (tencent/
+// hy3-preview) can't reliably self-encode code within its own structured
+// tool-call output once "starts to code" (per user report).
+//
+// Primary is a dedicated coding specialist; falls back to a second, unrelated
+// model (different provider pool entirely) if the primary fails, rather than
+// just giving up -- cheap insurance since both are inexpensive/free.
+const CODE_MODEL_PRIMARY = process.env.OPENROUTER_CODE_MODEL || "qwen/qwen3-coder-flash";
+const CODE_MODEL_FALLBACK = process.env.OPENROUTER_CODE_MODEL_FALLBACK || "nvidia/nemotron-3-ultra-550b-a55b:free";
+
+async function generateCode(task, model) {
+  const res = await axios.post(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      model,
+      messages: [{
+        role: "user",
+        content: `Write Node.js code to accomplish this task. Output ONLY the code -- no explanation, no markdown code fences.\n\nTask: ${task}`,
+      }],
+      max_tokens: 2048,
+    },
+    {
+      timeout: 60_000,
+      headers: {
+        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+    }
+  );
+  const code = res.data?.choices?.[0]?.message?.content;
+  if (!code) throw new Error("no response from code model");
+  return code.replace(/^```(?:js|javascript|node)?\n?/i, "").replace(/```\s*$/, "").trim();
+}
+
+async function writeAndRunJs(task) {
+  let code;
+  try {
+    code = await generateCode(task, CODE_MODEL_PRIMARY);
+  } catch (err) {
+    console.warn(`[write_and_run_js] primary model (${CODE_MODEL_PRIMARY}) failed: ${err.response?.data?.error?.message || err.message} -- trying fallback`);
+    try {
+      code = await generateCode(task, CODE_MODEL_FALLBACK);
+    } catch (err2) {
+      return `Code generation failed on both models: ${err2.response?.data?.error?.message || err2.message}`;
+    }
+  }
+  return runJs(code);
 }
 
 // ── Read uploaded file (PDF, Word, text) ──────────────────────────────────────
