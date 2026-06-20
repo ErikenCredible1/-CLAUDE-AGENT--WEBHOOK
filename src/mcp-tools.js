@@ -4,6 +4,7 @@ const { StdioClientTransport } = require("@modelcontextprotocol/sdk/client/stdio
 
 const WORK_DIR = path.join(__dirname, "../workspace");
 const BIN_DIR = path.join(__dirname, "../node_modules/.bin");
+const LOCAL_BIN_DIR = path.join(__dirname, "../bin");
 
 // Servers are real package.json dependencies (resolved once at build time),
 // spawned via their already-installed local bin -- not `npx`. On Render's
@@ -50,6 +51,20 @@ const MCP_SERVERS = [
     // chunk of the budget in one model-initiated call, and search just
     // duplicates the already-free Tavily web_search.
     allowedTools: ["firecrawl_scrape", "firecrawl_map"],
+  },
+  {
+    name: "lightpanda",
+    command: path.join(LOCAL_BIN_DIR, "lightpanda"),
+    args: ["mcp"],
+    requiredEnv: [],
+    // Real interactive browser automation (click, fill forms, evaluate JS) --
+    // viable on Render's free tier specifically because Lightpanda is a
+    // from-scratch browser engine, not a Chromium wrapper: ~123MB peak memory
+    // for 100 pages vs. Chrome's ~2GB for the same load. Binary is downloaded
+    // at `npm install` time (scripts/download-lightpanda.js), not at runtime.
+    // Beta software per its own docs -- may error/crash on complex sites;
+    // startOneServer's try/catch already isolates failures from the rest of
+    // the app, same as every other server here.
   },
 ];
 
