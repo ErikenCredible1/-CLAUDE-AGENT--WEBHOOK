@@ -194,8 +194,18 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // after exhausting retries on the primary (cheap) model, try once more on a
 // fallback model with a much larger, more mature provider pool before giving
 // up -- same insurance pattern already used for code generation.
+//
+// claude-sonnet-4.6 was the original fallback choice but is what blew through
+// the OpenRouter key's $3/week limit (one fallback call costs far more than
+// dozens of hy3-preview calls) -- switched to a free model with the same
+// multi-provider reliability profile (3 independent providers) instead.
+// A second, cheap (not free) tier sits behind that as a last resort, tried
+// only if the free one also fails.
 const RETRY_ATTEMPTS = 4;
-const FALLBACK_MODEL = process.env.OPENROUTER_FALLBACK_MODEL || "anthropic/claude-sonnet-4.6";
+const FALLBACK_CHAIN = [
+  process.env.OPENROUTER_FALLBACK_MODEL || "nvidia/nemotron-3-ultra-550b-a55b:free",
+  process.env.OPENROUTER_FALLBACK_MODEL_2 || "xiaomi/mimo-v2.5",
+];
 
 async function runAgentLoopWithRecovery(userId, history, userMsg, onProgress, memoryBlock) {
   let lastErr;
@@ -214,13 +224,18 @@ async function runAgentLoopWithRecovery(userId, history, userMsg, onProgress, me
     }
   }
 
-  console.warn(`[recovery] primary model exhausted for ${userId}: ${lastErr.message} — trying fallback model ${FALLBACK_MODEL}`);
-  try {
-    return await agentLoop(userId, history, onProgress, memoryBlock, FALLBACK_MODEL);
-  } catch (err) {
-    console.error(`[recovery] fallback model also failed for ${userId}: ${err.message}`);
-    return "Sorry — I'm having trouble reaching the AI model right now (upstream rate-limit or a temporary error). Your conversation history is untouched — please try again in a minute.";
+  for (const fallbackModel of FALLBACK_CHAIN) {
+    console.warn(`[recovery] primary model exhausted for ${userId}: ${lastErr.message} — trying fallback model ${fallbackModel}`);
+    try {
+      return await agentLoop(userId, history, onProgress, memoryBlock, fallbackModel);
+    } catch (err) {
+      console.warn(`[recovery] fallback model ${fallbackModel} also failed for ${userId}: ${err.message}`);
+      lastErr = err;
+    }
   }
+
+  console.error(`[recovery] all models exhausted for ${userId}: ${lastErr.message}`);
+  return "Sorry — I'm having trouble reaching the AI model right now (upstream rate-limit or a temporary error). Your conversation history is untouched — please try again in a minute.";
 }
 
 async function runAgent(userId, userInput, onProgress) {
