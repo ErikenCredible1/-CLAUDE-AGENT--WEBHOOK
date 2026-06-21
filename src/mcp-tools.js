@@ -36,12 +36,6 @@ const MCP_SERVERS = [
     requiredEnv: [],
   },
   {
-    name: "airbnb",
-    command: path.join(BIN_DIR, "mcp-server-airbnb"),
-    args: [],
-    requiredEnv: [],
-  },
-  {
     name: "firecrawl",
     command: path.join(BIN_DIR, "firecrawl-mcp"),
     args: [],
