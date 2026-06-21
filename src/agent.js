@@ -163,7 +163,16 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // Retry the SAME history several times (this intermittent bug often clears up
 // on its own within a few attempts) and never auto-clear -- only an explicit
 // user "clear"/"forget" command (isClearCommand) wipes history now.
+//
+// Confirmed this isn't reliably tied to any one content pattern -- it's failed
+// on both a huge truncated blob and a tiny clean exchange with no tools used
+// at all. That looks like an inherent reliability gap in hy3-preview's only
+// two providers, not something fixable by reshaping our requests further. So
+// after exhausting retries on the primary (cheap) model, try once more on a
+// fallback model with a much larger, more mature provider pool before giving
+// up -- same insurance pattern already used for code generation.
 const RETRY_ATTEMPTS = 4;
+const FALLBACK_MODEL = process.env.OPENROUTER_FALLBACK_MODEL || "anthropic/claude-sonnet-4.6";
 
 async function runAgentLoopWithRecovery(userId, history, userMsg, onProgress, memoryBlock) {
   let lastErr;
@@ -182,8 +191,13 @@ async function runAgentLoopWithRecovery(userId, history, userMsg, onProgress, me
     }
   }
 
-  console.error(`[recovery] still failing after ${RETRY_ATTEMPTS} attempts for ${userId}: ${lastErr.message}`);
-  return "Sorry — I'm having trouble reaching the AI model right now (upstream rate-limit or a temporary error). Your conversation history is untouched — please try again in a minute.";
+  console.warn(`[recovery] primary model exhausted for ${userId}: ${lastErr.message} — trying fallback model ${FALLBACK_MODEL}`);
+  try {
+    return await agentLoop(userId, history, onProgress, memoryBlock, FALLBACK_MODEL);
+  } catch (err) {
+    console.error(`[recovery] fallback model also failed for ${userId}: ${err.message}`);
+    return "Sorry — I'm having trouble reaching the AI model right now (upstream rate-limit or a temporary error). Your conversation history is untouched — please try again in a minute.";
+  }
 }
 
 async function runAgent(userId, userInput, onProgress) {
@@ -265,7 +279,7 @@ async function runAgentWithImage(userId, imageBuffer, caption, onProgress) {
   });
 }
 
-async function agentLoop(userId, history, onProgress, memoryBlock = null) {
+async function agentLoop(userId, history, onProgress, memoryBlock = null, model = null) {
   const messages = [
     { role: "system", content: getSystemPrompt(memoryBlock) },
     ...history,
@@ -276,7 +290,7 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null) {
   const unlockedTools = new Set(); // tools whose full schema was requested this turn — resets every call
 
   while (true) {
-    const response = await callLLM(messages, buildToolsForRequest(unlockedTools));
+    const response = await callLLM(messages, buildToolsForRequest(unlockedTools), model);
     const choice = response.choices[0];
 
     // Strip reasoning fields and normalize null content
@@ -425,8 +439,8 @@ function summarizeOutgoingTools(tools) {
     .concat([{ totalTools: (tools || []).length }]);
 }
 
-async function callLLM(messages, tools) {
-  const model = process.env.OPENROUTER_MODEL || "tencent/hy3-preview";
+async function callLLM(messages, tools, modelOverride = null) {
+  const model = modelOverride || process.env.OPENROUTER_MODEL || "tencent/hy3-preview";
   let res;
   try {
     res = await axios.post(
