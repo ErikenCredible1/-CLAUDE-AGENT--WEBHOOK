@@ -1,7 +1,7 @@
 const axios = require("axios");
 const { executeTool, TOOL_DEFINITIONS } = require("./tools");
 const { executeGoogleTool, GOOGLE_TOOL_DEFINITIONS } = require("./google-tools");
-const { executeMcpTool, getMcpToolDefinitions } = require("./mcp-tools");
+const { executeMcpTool, getMcpToolDefinitions, ensureServerStarted } = require("./mcp-tools");
 const { loadHistory, saveMessage, clearHistory, saveFact, loadFacts, deleteFact, buildMemoryBlock } = require("./memory");
 const { safeSlice } = require("./safe-slice");
 
@@ -48,8 +48,31 @@ function buildToolIndexText() {
     .join("\n");
 }
 
+// lightpanda and flights are lazy-started (not running at boot, saving the
+// memory they'd otherwise hold for the entire process lifetime) -- these two
+// meta-tools are the only way to bring them up. Always present, like
+// get_tool_schema, so the model can discover them even though their real
+// tools (goto, click, search_flights, ...) aren't in TOOL_REGISTRY yet.
+const ENABLE_BROWSER_AUTOMATION_DEFINITION = {
+  type: "function",
+  function: {
+    name: "enable_browser_automation",
+    description: "Enables real browser automation tools (navigate to a URL, click, fill forms, extract page content, evaluate JS) for the rest of this conversation. Call this first whenever the user needs you to interact with or read a website that a simple HTTP fetch can't handle (JS-rendered pages, forms, clicking through a flow).",
+    parameters: { type: "object", properties: {} },
+  },
+};
+
+const ENABLE_FLIGHT_SEARCH_DEFINITION = {
+  type: "function",
+  function: {
+    name: "enable_flight_search",
+    description: "Enables real flight search tools (search_flights, get_date_grid, find_airport_code) for the rest of this conversation. Call this first whenever the user asks about flights.",
+    parameters: { type: "object", properties: {} },
+  },
+};
+
 function buildToolsForRequest(unlockedTools) {
-  const tools = [GET_TOOL_SCHEMA_DEFINITION];
+  const tools = [GET_TOOL_SCHEMA_DEFINITION, ENABLE_BROWSER_AUTOMATION_DEFINITION, ENABLE_FLIGHT_SEARCH_DEFINITION];
   for (const name of unlockedTools) {
     const def = TOOL_REGISTRY.get(name);
     if (def) tools.push(def);
@@ -336,6 +359,18 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null, model 
             unlockedTools.add(toolArgs.tool_name);
             toolResult = JSON.stringify(def.function);
           }
+        } else if (toolName === "enable_browser_automation" || toolName === "enable_flight_search") {
+          const serverName = toolName === "enable_browser_automation" ? "lightpanda" : "flights";
+          try {
+            const newTools = await ensureServerStarted(serverName);
+            refreshToolRegistry();
+            for (const name of newTools) unlockedTools.add(name);
+            toolResult = newTools.length
+              ? `Enabled. Available now: ${newTools.join(", ")}. Call get_tool_schema on one of these to see its parameters, or call it directly.`
+              : `"${serverName}" was already enabled or failed to start -- check if its tools are already available.`;
+          } catch (err) {
+            toolResult = `Failed to enable ${serverName}: ${err.message}`;
+          }
         } else {
           // Defensive: if the model called a real tool directly without unlocking
           // it first, treat it as unlocked anyway — the schema already "leaked"
@@ -486,6 +521,8 @@ async function callLLM(messages, tools, modelOverride = null) {
 function describeToolCall(name, args) {
   switch (name) {
     case "get_tool_schema":         return `Looking up how to use ${args.tool_name}...`;
+    case "enable_browser_automation": return `Starting browser automation...`;
+    case "enable_flight_search":    return `Starting flight search...`;
     case "web_search":             return `Searching: "${args.query}"`;
     case "run_js":                 return `Running code...`;
     case "fetch_html":

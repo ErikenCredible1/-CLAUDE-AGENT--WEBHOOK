@@ -52,6 +52,7 @@ const MCP_SERVERS = [
     command: path.join(LOCAL_BIN_DIR, "lightpanda"),
     args: ["mcp"],
     requiredEnv: [],
+    lazy: true,
     // Real interactive browser automation (click, fill forms, evaluate JS) --
     // viable on Render's free tier specifically because Lightpanda is a
     // from-scratch browser engine, not a Chromium wrapper: ~123MB peak memory
@@ -60,12 +61,17 @@ const MCP_SERVERS = [
     // Beta software per its own docs -- may error/crash on complex sites;
     // startOneServer's try/catch already isolates failures from the rest of
     // the app, same as every other server here.
+    // lazy: true (2026-06-21) -- only spawned on first actual use (via
+    // enable_browser_automation in agent.js) instead of held in memory for
+    // the entire process lifetime. Render free-tier memory pressure from
+    // running this many persistent child processes caused a real OOM crash.
   },
   {
     name: "flights",
     command: path.join(BIN_DIR, "google-flights-mcp-server"),
     args: [],
     requiredEnv: [],
+    lazy: true, // see lightpanda's note above -- same reasoning
     // Talks to Google Flights' own backend protobuf API directly -- no
     // browser, no API key, no scraping. This is what real flight search
     // (search_flights, get_date_grid, find_airport_code) ended up being,
@@ -78,8 +84,9 @@ const MCP_SERVERS = [
   },
 ];
 
-const mcpClients = new Map();   // serverName -> Client
-const mcpToolIndex = new Map(); // toolName -> { serverName, definition }
+const mcpClients = new Map();     // serverName -> Client
+const mcpToolIndex = new Map();   // toolName -> { serverName, definition }
+const startPromises = new Map();  // serverName -> in-flight/completed start Promise (for lazy servers)
 
 async function startOneServer(cfg) {
   const missingEnv = cfg.requiredEnv.filter((k) => !process.env[k]);
@@ -118,11 +125,28 @@ async function startOneServer(cfg) {
   }
 }
 
-// Each server is an independent npx cold-start (10-15s+ on an unwarmed cache,
-// e.g. after Render's free-tier idle spindown) — run them in parallel so total
-// startup time is the slowest single server, not the sum of all of them.
+// Each eager server is an independent npx cold-start (10-15s+ on an unwarmed
+// cache, e.g. after Render's free-tier idle spindown) — run them in parallel
+// so total startup time is the slowest single server, not the sum of all.
+// lazy: true servers are skipped here entirely -- see ensureServerStarted.
 async function startMcpServers() {
-  await Promise.all(MCP_SERVERS.map(startOneServer));
+  await Promise.all(MCP_SERVERS.filter((cfg) => !cfg.lazy).map(startOneServer));
+}
+
+// Idempotent -- safe to call repeatedly or concurrently for the same server;
+// they share one in-flight start instead of double-spawning. Returns the
+// tool names that became available (empty if already running or it failed
+// to start), so the caller can unlock them for the rest of the current turn.
+async function ensureServerStarted(serverName) {
+  const cfg = MCP_SERVERS.find((c) => c.name === serverName);
+  if (!cfg) throw new Error(`Unknown MCP server "${serverName}"`);
+  if (mcpClients.has(serverName)) return [];
+
+  if (!startPromises.has(serverName)) {
+    startPromises.set(serverName, startOneServer(cfg));
+  }
+  await startPromises.get(serverName);
+  return [...mcpToolIndex.values()].filter((e) => e.serverName === serverName).map((e) => e.definition.function.name);
 }
 
 function getMcpToolDefinitions() {
@@ -146,4 +170,4 @@ async function executeMcpTool(name, args) {
   }
 }
 
-module.exports = { startMcpServers, getMcpToolDefinitions, executeMcpTool };
+module.exports = { startMcpServers, getMcpToolDefinitions, executeMcpTool, ensureServerStarted };
