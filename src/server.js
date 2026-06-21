@@ -12,6 +12,18 @@ const { startMcpServers } = require("./mcp-tools");
 const WORK_DIR = path.join(__dirname, "../workspace");
 if (!fs.existsSync(WORK_DIR)) fs.mkdirSync(WORK_DIR, { recursive: true });
 
+// Without these, any unexpected throw or unhandled promise rejection anywhere
+// in the app (e.g. an edge case in a model's response shape we didn't account
+// for) kills the entire Node process -- taking the bot down for every user
+// until Render auto-restarts it, with zero error logged. Log and keep running
+// instead; one bad request should never be able to crash the whole service.
+process.on("uncaughtException", (err) => {
+  console.error("[FATAL] Uncaught exception (process kept alive):", err.stack || err.message);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[FATAL] Unhandled rejection (process kept alive):", reason instanceof Error ? reason.stack : reason);
+});
+
 const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const ALLOWED_USER_ID = parseInt(process.env.TELEGRAM_USER_ID, 10);
