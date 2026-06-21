@@ -87,6 +87,7 @@ const MCP_SERVERS = [
 const mcpClients = new Map();     // serverName -> Client
 const mcpToolIndex = new Map();   // toolName -> { serverName, definition }
 const startPromises = new Map();  // serverName -> in-flight/completed start Promise (for lazy servers)
+const lastUsed = new Map();       // serverName -> timestamp of last tool call/start (lazy servers only)
 
 async function startOneServer(cfg) {
   const missingEnv = cfg.requiredEnv.filter((k) => !process.env[k]);
@@ -140,6 +141,7 @@ async function startMcpServers() {
 async function ensureServerStarted(serverName) {
   const cfg = MCP_SERVERS.find((c) => c.name === serverName);
   if (!cfg) throw new Error(`Unknown MCP server "${serverName}"`);
+  lastUsed.set(serverName, Date.now());
   if (mcpClients.has(serverName)) return [];
 
   if (!startPromises.has(serverName)) {
@@ -147,6 +149,44 @@ async function ensureServerStarted(serverName) {
   }
   await startPromises.get(serverName);
   return [...mcpToolIndex.values()].filter((e) => e.serverName === serverName).map((e) => e.definition.function.name);
+}
+
+// Frees a lazy server's memory back up once it's gone unused for a while,
+// rather than holding it for the rest of the process's life after one use --
+// e.g. enabled once for an unrelated earlier task in a long conversation that
+// never gets cleared, then left running for hours doing nothing.
+const IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+async function stopServer(serverName) {
+  const client = mcpClients.get(serverName);
+  if (!client) return;
+  try {
+    await client.close();
+  } catch (err) {
+    console.warn(`[MCP] error closing "${serverName}": ${err.message}`);
+  }
+  mcpClients.delete(serverName);
+  startPromises.delete(serverName);
+  lastUsed.delete(serverName);
+  for (const [toolName, entry] of mcpToolIndex) {
+    if (entry.serverName === serverName) mcpToolIndex.delete(toolName);
+  }
+  console.log(`[MCP] "${serverName}" stopped after ${Math.round(IDLE_TIMEOUT_MS / 60000)}min idle`);
+}
+
+// Returns true if anything was actually stopped, so the caller knows whether
+// it's worth refreshing its own tool registry (server.js owns the interval --
+// keeps this module from needing to call back into agent.js).
+async function stopIdleServers() {
+  const now = Date.now();
+  let stoppedAny = false;
+  for (const cfg of MCP_SERVERS.filter((c) => c.lazy)) {
+    if (mcpClients.has(cfg.name) && now - (lastUsed.get(cfg.name) || 0) > IDLE_TIMEOUT_MS) {
+      await stopServer(cfg.name);
+      stoppedAny = true;
+    }
+  }
+  return stoppedAny;
 }
 
 function getMcpToolDefinitions() {
@@ -158,6 +198,7 @@ async function executeMcpTool(name, args) {
   if (!entry) return null; // not an MCP tool
   const client = mcpClients.get(entry.serverName);
   if (!client) return `MCP server "${entry.serverName}" is not available.`;
+  if (lastUsed.has(entry.serverName)) lastUsed.set(entry.serverName, Date.now());
   try {
     const result = await client.callTool({ name, arguments: args });
     const text = (result.content || [])
@@ -170,4 +211,4 @@ async function executeMcpTool(name, args) {
   }
 }
 
-module.exports = { startMcpServers, getMcpToolDefinitions, executeMcpTool, ensureServerStarted };
+module.exports = { startMcpServers, getMcpToolDefinitions, executeMcpTool, ensureServerStarted, stopIdleServers };

@@ -7,7 +7,7 @@ const path = require("path");
 const { runAgent, runAgentWithImage, refreshToolRegistry, isUserBusy, requestPause } = require("./agent");
 const { createSchedule, listSchedules, deleteSchedule, parseScheduleRequest } = require("./scheduler");
 const { checkPriceAlerts } = require("./alerts");
-const { startMcpServers } = require("./mcp-tools");
+const { startMcpServers, stopIdleServers } = require("./mcp-tools");
 
 const WORK_DIR = path.join(__dirname, "../workspace");
 if (!fs.existsSync(WORK_DIR)) fs.mkdirSync(WORK_DIR, { recursive: true });
@@ -295,4 +295,12 @@ app.listen(PORT, async () => {
   startMcpServers()
     .then(refreshToolRegistry)
     .catch((err) => console.error("[MCP] startup error:", err.message));
+
+  // Frees a lazy server's memory back up after 10min idle instead of holding
+  // it for the rest of the process's life on one use -- e.g. enabled for an
+  // earlier, unrelated task in a long conversation that never gets cleared.
+  setInterval(async () => {
+    const stoppedAny = await stopIdleServers();
+    if (stoppedAny) refreshToolRegistry();
+  }, 2 * 60 * 1000).unref();
 });
