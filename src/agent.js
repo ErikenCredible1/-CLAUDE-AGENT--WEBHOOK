@@ -462,7 +462,12 @@ function summarizeOutgoingMessages(messages) {
     const contentStr = typeof m.content === "string" ? m.content : JSON.stringify(m.content || "");
     const toolCalls = (m.tool_calls || []).map((tc) => {
       const args = tc.function?.arguments || "";
-      return { name: tc.function?.name, argsLen: args.length, suspicious: findSuspiciousChar(args) };
+      // Dump the raw string too -- args are small (a few hundred chars max) and
+      // findSuspiciousChar only catches lone surrogates/control chars, which
+      // came back null on every message during the recurring "Unterminated
+      // string" 400s, so whatever's actually breaking the provider's parser
+      // isn't one of those. Need to see the literal bytes next time it fires.
+      return { name: tc.function?.name, argsLen: args.length, suspicious: findSuspiciousChar(args), args };
     });
     return {
       role: m.role,
@@ -510,8 +515,8 @@ async function callLLM(messages, tools, modelOverride = null) {
     const body = err.response?.data;
     const rawBody = body !== undefined ? JSON.stringify(body) : err.message;
     console.error(`[callLLM] HTTP error ${err.response?.status} — full response body:`, rawBody);
-    console.error(`[callLLM] outgoing request shape:`, summarizeOutgoingMessages(messages));
-    console.error(`[callLLM] outgoing tools shape:`, summarizeOutgoingTools(tools));
+    console.error(`[callLLM] outgoing request shape:`, JSON.stringify(summarizeOutgoingMessages(messages), null, 2));
+    console.error(`[callLLM] outgoing tools shape:`, JSON.stringify(summarizeOutgoingTools(tools), null, 2));
     const detail = body?.error?.message || rawBody;
     throw new Error(`LLM request failed (${err.response?.status}): ${detail}`);
   }
@@ -519,14 +524,14 @@ async function callLLM(messages, tools, modelOverride = null) {
   const data = res.data;
   if (data.error) {
     console.error("[callLLM] API error — full response body:", JSON.stringify(data));
-    console.error(`[callLLM] outgoing request shape:`, summarizeOutgoingMessages(messages));
-    console.error(`[callLLM] outgoing tools shape:`, summarizeOutgoingTools(tools));
+    console.error(`[callLLM] outgoing request shape:`, JSON.stringify(summarizeOutgoingMessages(messages), null, 2));
+    console.error(`[callLLM] outgoing tools shape:`, JSON.stringify(summarizeOutgoingTools(tools), null, 2));
     throw new Error(`OpenRouter error: ${JSON.stringify(data.error)}`);
   }
   if (!data.choices || data.choices.length === 0) {
     console.error("[callLLM] No choices in response — full response body:", JSON.stringify(data));
-    console.error(`[callLLM] outgoing request shape:`, summarizeOutgoingMessages(messages));
-    console.error(`[callLLM] outgoing tools shape:`, summarizeOutgoingTools(tools));
+    console.error(`[callLLM] outgoing request shape:`, JSON.stringify(summarizeOutgoingMessages(messages), null, 2));
+    console.error(`[callLLM] outgoing tools shape:`, JSON.stringify(summarizeOutgoingTools(tools), null, 2));
     throw new Error(`No response from model. Raw: ${JSON.stringify(data).slice(0, 300)}`);
   }
 
