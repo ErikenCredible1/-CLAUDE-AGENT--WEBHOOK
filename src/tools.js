@@ -4,6 +4,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { extractTextFromFile } = require("./file-extract");
+const { safeSlice } = require("./safe-slice");
 
 const WORK_DIR = path.join(__dirname, "../workspace");
 if (!fs.existsSync(WORK_DIR)) fs.mkdirSync(WORK_DIR, { recursive: true });
@@ -109,6 +110,35 @@ const TOOL_DEFINITIONS = [
           filename: { type: "string", description: "Filename to read" },
         },
         required: ["filename"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "fetch_jina",
+      description: "Fetch a URL via Jina Reader and return clean readable content. Handles JavaScript-rendered pages. Free with no API key. Use this BEFORE firecrawl_scrape or enable_browser_automation — try fetch_readable first for simple pages, then this for JS-heavy ones.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "The URL to fetch" },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "fetch_browserless",
+      description: "Fetch a fully rendered page using a real cloud browser (Browserless). Use when fetch_jina fails or the page requires heavy JS execution. Supports an optional Puppeteer script for clicking, filling forms, or extracting specific data.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "The URL to load" },
+          script: { type: "string", description: "Optional Puppeteer script (JS) to run in the page context and return data, e.g. 'return document.title'" },
+        },
+        required: ["url"],
       },
     },
   },
@@ -234,6 +264,8 @@ async function executeTool(name, args, userId = "default") {
     case "get_stock_price":   return await getStockPrice(args.symbol);
     case "get_crypto_price":  return await getCryptoPrice(args.coin);
     case "set_price_alert":   return await setPriceAlert(args.symbol, args.type, args.condition, args.target);
+    case "fetch_jina":         return await fetchJina(args.url);
+    case "fetch_browserless":  return await fetchBrowserless(args.url, args.script);
     case "read_uploaded_file":return await readUploadedFile(args.filename);
     case "plan_task":         return planTask(args.task, args.steps);
     case "create_pdf":        return await createPdf(args.filename, args.title, args.content);
@@ -272,6 +304,49 @@ async function executeTool(name, args, userId = "default") {
       return deleted ? `Deleted schedule: "${args.name}"` : `No schedule found with name "${args.name}"`;
     }
     default: throw new Error(`Unknown tool: ${name}`);
+  }
+}
+
+// ── Jina Reader ───────────────────────────────────────────────────────────────
+async function fetchJina(url) {
+  try {
+    const res = await axios.get(`https://r.jina.ai/${url}`, {
+      headers: { Accept: "text/plain", "X-Return-Format": "markdown" },
+      timeout: 30_000,
+    });
+    return safeSlice(String(res.data), 8000);
+  } catch (err) {
+    return `Jina fetch failed: ${err.response?.status || ""} ${err.message}`;
+  }
+}
+
+// ── Browserless ───────────────────────────────────────────────────────────────
+async function fetchBrowserless(url, script = null) {
+  if (!process.env.BROWSERLESS_API_KEY) return "Browserless not configured (BROWSERLESS_API_KEY missing).";
+  try {
+    if (script) {
+      // Run a custom Puppeteer function and return its result
+      const res = await axios.post(
+        `https://chrome.browserless.io/function?token=${process.env.BROWSERLESS_API_KEY}`,
+        {
+          code: `module.exports = async ({ page }) => {
+  await page.goto(${JSON.stringify(url)}, { waitUntil: 'networkidle2', timeout: 20000 });
+  return { data: await page.evaluate(() => { ${script} }) };
+}`,
+        },
+        { timeout: 40_000, headers: { "Content-Type": "application/json" } }
+      );
+      return safeSlice(JSON.stringify(res.data), 8000);
+    }
+    // Default: return rendered page content
+    const res = await axios.post(
+      `https://chrome.browserless.io/content?token=${process.env.BROWSERLESS_API_KEY}`,
+      { url, waitFor: 2000 },
+      { timeout: 40_000, headers: { "Content-Type": "application/json" } }
+    );
+    return safeSlice(String(res.data), 8000);
+  } catch (err) {
+    return `Browserless fetch failed: ${err.response?.status || ""} ${err.message}`;
   }
 }
 
