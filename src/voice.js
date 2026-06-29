@@ -1,6 +1,6 @@
 // Atlas Voice Agent — Telnyx + Deepgram + Gemini 2.5 Flash TTS
 const WebSocket = require("ws");
-const { createClient, LiveTranscriptionEvents } = require("@deepgram/sdk");
+const { DeepgramClient } = require("@deepgram/sdk");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const axios = require("axios");
 const { runAgent } = require("./agent");
@@ -73,7 +73,7 @@ function closeSession(callControlId) {
   const session = sessions.get(callControlId);
   if (!session) return;
   if (session.deepgramLive) {
-    try { session.deepgramLive.finish(); } catch {}
+    try { session.deepgramLive.socket.close(); } catch {}
   }
   sessions.delete(callControlId);
   console.log(`[Voice] Session closed: ${callControlId}`);
@@ -99,7 +99,7 @@ function handleMediaWebSocket(ws) {
       }
 
       session.ws = ws;
-      session.deepgramLive = createDeepgramStream(callControlId);
+      session.deepgramLive = await createDeepgramStream(callControlId);
 
       const greeting = session.isOwner
         ? "Hey, what's up?"
@@ -114,7 +114,7 @@ function handleMediaWebSocket(ws) {
       const session = callControlId ? sessions.get(callControlId) : null;
       if (!session?.deepgramLive) return;
       const audio = Buffer.from(msg.media.payload, "base64");
-      try { session.deepgramLive.send(audio); } catch {}
+      try { session.deepgramLive.socket.send(audio); } catch {}
       return;
     }
 
@@ -132,10 +132,10 @@ function handleMediaWebSocket(ws) {
 
 // ── Deepgram streaming STT ────────────────────────────────────────────────────
 
-function createDeepgramStream(callControlId) {
-  const dg = createClient(process.env.DEEPGRAM_API_KEY);
+async function createDeepgramStream(callControlId) {
+  const client = new DeepgramClient(process.env.DEEPGRAM_API_KEY);
 
-  const live = dg.listen.live({
+  const connection = await client.listen.v1.connect({
     model: "nova-2",
     language: "en-US",
     encoding: "mulaw",
@@ -145,11 +145,12 @@ function createDeepgramStream(callControlId) {
     smart_format: true,
   });
 
-  live.on(LiveTranscriptionEvents.Open, () => {
+  connection.on("open", () => {
     console.log(`[Voice] Deepgram open for ${callControlId}`);
   });
 
-  live.on(LiveTranscriptionEvents.Transcript, async (data) => {
+  connection.on("message", async (data) => {
+    if (data.type !== "Results") return;
     if (!data.is_final) return;
     const text = data.channel?.alternatives?.[0]?.transcript?.trim();
     if (!text) return;
@@ -175,11 +176,14 @@ function createDeepgramStream(callControlId) {
     }
   });
 
-  live.on(LiveTranscriptionEvents.Error, (err) => {
-    console.error("[Voice] Deepgram error:", err.message);
+  connection.on("error", (err) => {
+    console.error("[Voice] Deepgram error:", err.message || err);
   });
 
-  return live;
+  connection.connect();
+  await connection.waitForOpen();
+
+  return connection;
 }
 
 // ── Agent routing ─────────────────────────────────────────────────────────────
