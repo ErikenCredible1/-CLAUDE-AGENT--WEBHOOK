@@ -142,7 +142,7 @@ You can do real work, not just answer questions. For complex/multi-step tasks: c
 
 COMPLETENESS: If the user asks for N items (e.g. "top 20 SUVs"), you MUST return exactly N items — no fewer. Do multiple searches if needed. Do not stop at 3-5 results and call that done.
 
-SHOPPING: When the user asks about buying, finding, or comparing products, always include a direct link to purchase or view each item. Use the retailer's product page URL, not a search results page.
+SHOPPING: When the user asks about buying, finding, or comparing products, always include the price and a direct link to purchase or view each item. Use the retailer's product page URL, not a search results page.
 
 MEMORY: remember saves a personal fact permanently; recall lists what you know; forget_fact deletes one.
 
@@ -364,8 +364,8 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null, model 
     }
 
     for (const toolCall of assistantMsg.tool_calls) {
-      toolCallCount++;
       const toolName = toolCall.function.name;
+      if (toolName !== "get_tool_schema") toolCallCount++;
       let toolArgs;
       try {
         toolArgs = JSON.parse(toolCall.function.arguments);

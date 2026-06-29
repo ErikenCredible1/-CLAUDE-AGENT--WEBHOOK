@@ -387,13 +387,25 @@ async function listDriveFiles({ folder_name, max_results = 10 }) {
 async function readDriveFile({ filename }) {
   const drive = getDrive();
 
-  const res = await drive.files.list({
+  // Exact match first, then partial match fallback so "invoice" finds "Invoice_June.pdf"
+  let file;
+  const exactRes = await drive.files.list({
     q: `name='${filename}' and trashed=false`,
     fields: "files(id, name, mimeType)",
+    pageSize: 1,
   });
+  file = exactRes.data.files?.[0];
 
-  const file = res.data.files?.[0];
-  if (!file) return `File "${filename}" not found in Drive.`;
+  if (!file) {
+    const partialRes = await drive.files.list({
+      q: `name contains '${filename}' and trashed=false`,
+      fields: "files(id, name, mimeType)",
+      pageSize: 1,
+      orderBy: "modifiedTime desc",
+    });
+    file = partialRes.data.files?.[0];
+    if (!file) return `File "${filename}" not found in Drive. Use list_drive_files to see exact names.`;
+  }
 
   // Export Google Docs as plain text
   if (file.mimeType === "application/vnd.google-apps.document") {
@@ -407,24 +419,16 @@ async function readDriveFile({ filename }) {
     return safeSlice(String(exported.data), 10000);
   }
 
-  // Download other files
+  // Download binary file (PDF, docx, etc.) and use shared extractor
   const downloaded = await drive.files.get({ fileId: file.id, alt: "media" }, { responseType: "arraybuffer" });
   const buffer = Buffer.from(downloaded.data);
-
-  // Try to parse PDF
-  if (file.mimeType === "application/pdf") {
-    const { PDFParse } = require("pdf-parse");
-    const parser = new PDFParse({ data: buffer });
-    try {
-      const result = await parser.getText();
-      return safeSlice(result.text, 10000);
-    } finally {
-      await parser.destroy();
-    }
+  const tmpPath = path.join(WORK_DIR, file.name);
+  fs.writeFileSync(tmpPath, buffer);
+  try {
+    return await extractTextFromFile(tmpPath);
+  } finally {
+    try { fs.unlinkSync(tmpPath); } catch {}
   }
-
-  // Plain text
-  return safeSlice(buffer.toString("utf8"), 10000);
 }
 
 // ── Google Calendar ───────────────────────────────────────────────────────────
