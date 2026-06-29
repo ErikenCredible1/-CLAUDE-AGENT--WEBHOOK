@@ -48,7 +48,7 @@ bot.on("photo", (ctx) => {
     const result = await runAgentWithImage(userId, imageBuffer, caption, async (p) => {
       await send(userId, `🔧 ${p}`).catch(() => {});
     });
-    await send(userId, `✅ Done!\n\n${result}`);
+    await send(userId, result);
   })().catch((err) => {
     send(userId, `❌ Error analysing image: ${err.message}`).catch(() => {});
   });
@@ -139,7 +139,7 @@ bot.on("text", async (ctx) => {
   runAgent(userId, text, async (p) => {
     await send(userId, `🔧 ${p}`).catch(() => {});
   }).then((result) => {
-    send(userId, `✅ Done!\n\n${result}`).catch(() => {});
+    send(userId, result).catch(() => {});
   }).catch((err) => {
     console.error("Agent error:", err);
     send(userId, `❌ Something went wrong:\n${err.message}`).catch(() => {});

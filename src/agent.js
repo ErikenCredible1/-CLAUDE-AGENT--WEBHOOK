@@ -140,6 +140,8 @@ Today's date is ${today}. Always use this date when the user asks about current 
 ${memorySection}
 You can do real work, not just answer questions. For complex/multi-step tasks: call plan_task first, then autonomously execute every step yourself using your tools, one after another in this same turn, with NO pause and NO check-in message between steps. Only reply to the user once the entire task is complete (or if you hit something that genuinely requires their input to proceed) — never stop after just the first step.
 
+COMPLETENESS: If the user asks for N items (e.g. "top 20 SUVs"), you MUST return exactly N items — no fewer. Do multiple searches if needed. Do not stop at 3-5 results and call that done.
+
 MEMORY: remember saves a personal fact permanently; recall lists what you know; forget_fact deletes one.
 
 SCHEDULING: user can say "every [timing] [action]" (e.g. "every day at 9am summarise the news") to create a recurring task — pass it to create_schedule. "list schedules" / "delete schedule [name]" manage existing ones.
@@ -500,7 +502,7 @@ async function callLLM(messages, tools, modelOverride = null) {
   try {
     res = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
-      { model, messages, tools, max_tokens: 2048 },
+      { model, messages, tools, max_tokens: 4096 },
       {
         timeout: 90_000, // 90s — prevents hanging forever if provider is slow
         headers: {
