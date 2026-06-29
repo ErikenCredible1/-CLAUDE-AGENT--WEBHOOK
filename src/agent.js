@@ -561,7 +561,6 @@ function describeToolCall(name, args) {
     case "enable_browser_automation": return `Starting browser automation...`;
     case "enable_flight_search":    return `Starting flight search...`;
     case "web_search":             return `Searching: "${args.query}"`;
-    case "generate_image":         return `Generating image: "${args.prompt?.slice(0, 50)}..."`;
     case "run_js":                 return `Running code...`;
     case "fetch_html":
     case "fetch_markdown":

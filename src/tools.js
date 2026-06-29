@@ -116,25 +116,6 @@ const TOOL_DEFINITIONS = [
   {
     type: "function",
     function: {
-      name: "generate_image",
-      description: "Generate an image from a text description using AI (Flux Schnell). The image is sent directly to the user in chat. Use whenever the user asks to create, generate, draw, or make an image.",
-      parameters: {
-        type: "object",
-        properties: {
-          prompt: { type: "string", description: "Detailed description of the image to generate" },
-          image_size: {
-            type: "string",
-            enum: ["square", "square_hd", "portrait_4_3", "portrait_16_9", "landscape_4_3", "landscape_16_9"],
-            description: "Image dimensions — default: square",
-          },
-        },
-        required: ["prompt"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "fetch_jina",
       description: "Fetch a URL via Jina Reader and return clean readable content. Handles JavaScript-rendered pages. Free with no API key. Use this BEFORE firecrawl_scrape or enable_browser_automation — try fetch_readable first for simple pages, then this for JS-heavy ones.",
       parameters: {
@@ -283,7 +264,6 @@ async function executeTool(name, args, userId = "default") {
     case "get_stock_price":   return await getStockPrice(args.symbol);
     case "get_crypto_price":  return await getCryptoPrice(args.coin);
     case "set_price_alert":   return await setPriceAlert(args.symbol, args.type, args.condition, args.target);
-    case "generate_image":     return await generateImage(args.prompt, args.image_size, userId);
     case "fetch_jina":         return await fetchJina(args.url);
     case "fetch_browserless":  return await fetchBrowserless(args.url, args.script);
     case "read_uploaded_file":return await readUploadedFile(args.filename);
@@ -325,40 +305,6 @@ async function executeTool(name, args, userId = "default") {
     }
     default: throw new Error(`Unknown tool: ${name}`);
   }
-}
-
-// ── Image generation (FAL.ai Flux Schnell) ───────────────────────────────────
-async function generateImage(prompt, imageSize = "square", userId) {
-  if (!process.env.FALAI_API_KEY) return "Image generation not configured (FALAI_API_KEY missing).";
-
-  const res = await axios.post(
-    "https://fal.run/fal-ai/flux/schnell",
-    {
-      prompt,
-      image_size: imageSize,
-      num_inference_steps: 4,
-      num_images: 1,
-      enable_safety_checker: true,
-    },
-    {
-      headers: { Authorization: `Key ${process.env.FALAI_API_KEY}`, "Content-Type": "application/json" },
-      timeout: 60_000,
-    }
-  );
-
-  const imageUrl = res.data.images?.[0]?.url;
-  if (!imageUrl) throw new Error("FAL.ai returned no image URL");
-
-  // Send the photo directly to Telegram — no need to route it back through the agent response
-  if (userId && process.env.TELEGRAM_BOT_TOKEN) {
-    await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendPhoto`, {
-      chat_id: userId,
-      photo: imageUrl,
-      caption: prompt.length > 200 ? prompt.slice(0, 197) + "..." : prompt,
-    });
-  }
-
-  return "Image generated and sent!";
 }
 
 // ── Jina Reader ───────────────────────────────────────────────────────────────
