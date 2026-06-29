@@ -1,4 +1,5 @@
 // Atlas Voice Agent — Telnyx + Deepgram + Gemini 2.5 Flash TTS
+const crypto = require("crypto");
 const WebSocket = require("ws");
 const { DeepgramClient } = require("@deepgram/sdk");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
@@ -7,6 +8,9 @@ const { runAgent } = require("./agent");
 
 // Active call sessions: callControlId → session
 const sessions = new Map();
+
+// In-memory TTS audio cache: id → WAV buffer (served via /tts-audio/:id)
+const ttsCache = new Map();
 
 // ── Telnyx webhook handler ────────────────────────────────────────────────────
 
@@ -51,7 +55,7 @@ async function onCallAnswered({ call_control_id }) {
   const wsUrl = renderUrl.replace(/^https?:\/\//, "wss://") + "/media-stream";
   await telnyxAction(call_control_id, "streaming_start", {
     stream_url: wsUrl,
-    stream_track: "both_tracks",
+    stream_track: "inbound_track",
   });
 }
 
@@ -233,7 +237,7 @@ Keep replies to 1-2 short sentences. Natural conversational tone, no filler.`,
 }
 
 // ── Gemini 2.5 Flash TTS ──────────────────────────────────────────────────────
-// Returns mulaw 8kHz audio buffer ready for Telnyx
+// Returns a WAV buffer (PCM16 8kHz mono) for Telnyx playback_start
 
 async function textToSpeech(text) {
   if (!process.env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY not configured");
@@ -256,55 +260,66 @@ async function textToSpeech(text) {
   const part = result.response.candidates?.[0]?.content?.parts?.[0];
   if (!part?.inlineData?.data) throw new Error("No audio in Gemini TTS response");
 
-  // Gemini returns PCM16 at 24kHz → convert to mulaw 8kHz for Telnyx
-  const pcm = Buffer.from(part.inlineData.data, "base64");
-  return pcm16ToMulaw(pcm, 24000, 8000);
+  // Gemini returns L16 PCM big-endian at 24kHz — downsample to 8kHz and wrap in WAV
+  const raw = Buffer.from(part.inlineData.data, "base64");
+  const pcm8k = downsamplePcm16Be(raw, 24000, 8000);
+  return buildWav(pcm8k, 8000);
 }
 
-// Downsample PCM16 from srcRate to dstRate, encode as G.711 mulaw
-function pcm16ToMulaw(pcmBuffer, srcRate, dstRate) {
-  const samples = new Int16Array(pcmBuffer.buffer, pcmBuffer.byteOffset, pcmBuffer.byteLength / 2);
+// Downsample big-endian PCM16 from srcRate to dstRate
+function downsamplePcm16Be(buf, srcRate, dstRate) {
   const ratio = srcRate / dstRate;
-  const outLen = Math.floor(samples.length / ratio);
-  const out = Buffer.alloc(outLen);
+  const inSamples = buf.length / 2;
+  const outLen = Math.floor(inSamples / ratio);
+  const out = Buffer.alloc(outLen * 2);
   for (let i = 0; i < outLen; i++) {
-    out[i] = encodeMulaw(samples[Math.floor(i * ratio)]);
+    const srcIdx = Math.floor(i * ratio);
+    const sample = buf.readInt16BE(srcIdx * 2);
+    out.writeInt16LE(sample, i * 2); // WAV uses little-endian
   }
   return out;
 }
 
-function encodeMulaw(s) {
-  const BIAS = 33, CLIP = 32635;
-  let sign = (s >> 8) & 0x80;
-  if (sign) s = -s;
-  if (s > CLIP) s = CLIP;
-  s += BIAS;
-  let exp = 7;
-  for (let mask = 0x4000; !(s & mask) && exp > 0; mask >>= 1) exp--;
-  return (~(sign | (exp << 4) | ((s >> (exp + 3)) & 0x0f))) & 0xff;
+function buildWav(pcmLe, sampleRate) {
+  const header = Buffer.alloc(44);
+  const dataLen = pcmLe.length;
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + dataLen, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);               // PCM
+  header.writeUInt16LE(1, 22);               // mono
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * 2, 28);  // byteRate
+  header.writeUInt16LE(2, 32);               // blockAlign
+  header.writeUInt16LE(16, 34);              // bitsPerSample
+  header.write("data", 36);
+  header.writeUInt32LE(dataLen, 40);
+  return Buffer.concat([header, pcmLe]);
 }
 
-// ── Send audio to caller via WebSocket ───────────────────────────────────────
+// ── Serve TTS audio and play via Telnyx ──────────────────────────────────────
 
 async function speakToCall(session, text) {
   if (!text?.trim()) return;
   console.log(`[Voice] Speaking: "${text.slice(0, 60)}"`);
 
   try {
-    const audio = await textToSpeech(text);
-    const { ws } = session;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const wav = await textToSpeech(text);
+    const id = crypto.randomUUID();
+    ttsCache.set(id, wav);
+    // Auto-clean after 60s in case Telnyx never fetches
+    setTimeout(() => ttsCache.delete(id), 60_000);
 
-    const CHUNK = 160; // 20ms at 8kHz mulaw
-    for (let i = 0; i < audio.length; i += CHUNK) {
-      ws.send(JSON.stringify({
-        event: "media",
-        media: { payload: audio.slice(i, i + CHUNK).toString("base64") },
-      }));
-    }
-    ws.send(JSON.stringify({ event: "mark", mark: { name: "tts_done" } }));
+    const audioUrl = `${process.env.RENDER_URL}/tts-audio/${id}`;
+    await telnyxAction(session.callControlId, "playback_start", {
+      audio_url: audioUrl,
+      overlay: false,
+    });
+    console.log(`[Voice] Gemini TTS playing: ${id}`);
   } catch (err) {
-    console.error("[Voice] Gemini TTS failed, falling back to Telnyx speak:", err.message);
+    console.error("[Voice] Gemini TTS failed, falling back to Telnyx speak:", err?.message || err);
     await telnyxAction(session.callControlId, "speak", {
       payload: text,
       payload_type: "text",
@@ -350,4 +365,4 @@ async function telnyxAction(callControlId, action, params) {
   );
 }
 
-module.exports = { handleTelnyxWebhook, handleMediaWebSocket };
+module.exports = { handleTelnyxWebhook, handleMediaWebSocket, ttsCache };

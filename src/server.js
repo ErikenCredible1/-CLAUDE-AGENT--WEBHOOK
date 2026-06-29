@@ -9,7 +9,7 @@ const { runAgent, runAgentWithImage, refreshToolRegistry, isUserBusy, requestPau
 const { createSchedule, listSchedules, deleteSchedule, parseScheduleRequest } = require("./scheduler");
 const { checkPriceAlerts } = require("./alerts");
 const { startMcpServers, stopIdleServers } = require("./mcp-tools");
-const { handleTelnyxWebhook, handleMediaWebSocket } = require("./voice");
+const { handleTelnyxWebhook, handleMediaWebSocket, ttsCache } = require("./voice");
 
 const WORK_DIR = path.join(__dirname, "../workspace");
 if (!fs.existsSync(WORK_DIR)) fs.mkdirSync(WORK_DIR, { recursive: true });
@@ -248,6 +248,15 @@ app.get("/google-test", async (req, res) => {
 
 // ── Voice call webhook (Telnyx) ───────────────────────────────────────────────
 app.post("/voice-call", express.json(), handleTelnyxWebhook);
+
+// ── Gemini TTS audio endpoint (fetched by Telnyx during playback_start) ──────
+app.get("/tts-audio/:id", (req, res) => {
+  const wav = ttsCache.get(req.params.id);
+  if (!wav) return res.status(404).send("Not found");
+  ttsCache.delete(req.params.id);
+  res.set("Content-Type", "audio/wav");
+  res.send(wav);
+});
 
 // ── Price alert check endpoint ────────────────────────────────────────────────
 app.post("/check-alerts", express.json(), async (req, res) => {
