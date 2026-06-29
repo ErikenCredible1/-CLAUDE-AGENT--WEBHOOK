@@ -561,6 +561,7 @@ function describeToolCall(name, args) {
     case "enable_browser_automation": return `Starting browser automation...`;
     case "enable_flight_search":    return `Starting flight search...`;
     case "web_search":             return `Searching: "${args.query}"`;
+    case "generate_image":         return `Generating image: "${args.prompt?.slice(0, 50)}..."`;
     case "run_js":                 return `Running code...`;
     case "fetch_html":
     case "fetch_markdown":
@@ -575,8 +576,6 @@ function describeToolCall(name, args) {
     case "write_file":             return `Writing ${args.path}`;
     case "list_directory":         return `Listing files...`;
     case "sequentialthinking":     return `Thinking through this...`;
-    case "airbnb_search":          return `Searching Airbnb listings...`;
-    case "airbnb_listing_details": return `Getting Airbnb listing details...`;
     case "get_stock_price":        return `Getting ${args.symbol} price...`;
     case "get_crypto_price":       return `Getting ${args.coin} price...`;
     case "set_price_alert":        return `Setting price alert for ${args.symbol}...`;
