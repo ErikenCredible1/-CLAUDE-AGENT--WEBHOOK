@@ -51,7 +51,7 @@ async function onCallAnswered({ call_control_id }) {
   const wsUrl = renderUrl.replace(/^https?:\/\//, "wss://") + "/media-stream";
   await telnyxAction(call_control_id, "streaming_start", {
     stream_url: wsUrl,
-    stream_track: "inbound_track",
+    stream_track: "both_tracks",
   });
 }
 
@@ -140,7 +140,7 @@ async function createDeepgramStream(callControlId) {
     language: "en-US",
     encoding: "mulaw",
     sample_rate: 8000,
-    endpointing: 700,         // ms of silence → end of utterance
+    endpointing: 500,         // ms of silence → end of utterance
     interim_results: false,
     smart_format: true,
   });
@@ -289,12 +289,29 @@ function encodeMulaw(s) {
 async function speakToCall(session, text) {
   if (!text?.trim()) return;
   console.log(`[Voice] Speaking: "${text.slice(0, 60)}"`);
-  await telnyxAction(session.callControlId, "speak", {
-    payload: text,
-    payload_type: "text",
-    voice: "female",
-    language: "en-US",
-  }).catch((e) => console.error("[Voice] Telnyx speak error:", e.message));
+
+  try {
+    const audio = await textToSpeech(text);
+    const { ws } = session;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    const CHUNK = 160; // 20ms at 8kHz mulaw
+    for (let i = 0; i < audio.length; i += CHUNK) {
+      ws.send(JSON.stringify({
+        event: "media",
+        media: { payload: audio.slice(i, i + CHUNK).toString("base64") },
+      }));
+    }
+    ws.send(JSON.stringify({ event: "mark", mark: { name: "tts_done" } }));
+  } catch (err) {
+    console.error("[Voice] Gemini TTS failed, falling back to Telnyx speak:", err.message);
+    await telnyxAction(session.callControlId, "speak", {
+      payload: text,
+      payload_type: "text",
+      voice: "female",
+      language: "en-US",
+    }).catch((e) => console.error("[Voice] Telnyx speak error:", e.message));
+  }
 }
 
 // ── Telegram notification for missed messages ─────────────────────────────────
