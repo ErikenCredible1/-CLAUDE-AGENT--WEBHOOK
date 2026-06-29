@@ -277,6 +277,7 @@ async function executeTool(name, args, userId = "default") {
 
 // ── Web search ────────────────────────────────────────────────────────────────
 async function webSearch(query) {
+  // 1. Tavily
   if (process.env.TAVILY_API_KEY) {
     console.log(`[Tavily] Searching: "${query}" with key: ${process.env.TAVILY_API_KEY.slice(0, 8)}...`);
     try {
@@ -290,12 +291,35 @@ async function webSearch(query) {
       const results = (res.data.results || [])
         .map((r) => `[${r.title}]\n${r.url}\n${r.content}`)
         .join("\n\n");
-      return results || "No results found.";
+      if (results) return results;
     } catch (err) {
       console.error(`[Tavily] Error: ${err.response?.status} ${err.response?.data?.message || err.message}`);
-      console.log("[Tavily] Falling back to DuckDuckGo...");
     }
+    console.log("[Tavily] Falling back to Brave...");
   }
+
+  // 2. Brave Search
+  if (process.env.BRAVE_API_KEY) {
+    try {
+      const res = await axios.get("https://api.search.brave.com/res/v1/web/search", {
+        params: { q: query, count: 5 },
+        headers: {
+          "X-Subscription-Token": process.env.BRAVE_API_KEY,
+          Accept: "application/json",
+        },
+        timeout: 10_000,
+      });
+      const results = (res.data.web?.results || [])
+        .map((r) => `[${r.title}]\n${r.url}\n${r.description || ""}`)
+        .join("\n\n");
+      if (results) return results;
+    } catch (err) {
+      console.error(`[Brave] Error: ${err.response?.status} ${err.message}`);
+    }
+    console.log("[Brave] Falling back to DuckDuckGo...");
+  }
+
+  // 3. DuckDuckGo (last resort — limited results)
   const res = await axios.get("https://api.duckduckgo.com/", {
     params: { q: query, format: "json", no_html: 1, skip_disambig: 1 },
   });
