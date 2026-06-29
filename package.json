@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",
+    "@deepgram/sdk": "^5.5.0",
+    "@google/generative-ai": "^0.24.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@modelcontextprotocol/server-filesystem": "^2026.1.14",
     "@modelcontextprotocol/server-sequential-thinking": "^2025.12.18",
@@ -27,7 +29,8 @@
     "node-fetch": "^2.7.0",
     "pdf-parse": "^2.4.5",
     "pdfkit": "^0.19.1",
-    "telegraf": "^4.16.3"
+    "telegraf": "^4.16.3",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"

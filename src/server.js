@@ -1,5 +1,6 @@
 require("dotenv").config();
 const express = require("express");
+const { WebSocketServer } = require("ws");
 const { Telegraf } = require("telegraf");
 const axios = require("axios");
 const fs = require("fs");
@@ -8,6 +9,7 @@ const { runAgent, runAgentWithImage, refreshToolRegistry, isUserBusy, requestPau
 const { createSchedule, listSchedules, deleteSchedule, parseScheduleRequest } = require("./scheduler");
 const { checkPriceAlerts } = require("./alerts");
 const { startMcpServers, stopIdleServers } = require("./mcp-tools");
+const { handleTelnyxWebhook, handleMediaWebSocket } = require("./voice");
 
 const WORK_DIR = path.join(__dirname, "../workspace");
 if (!fs.existsSync(WORK_DIR)) fs.mkdirSync(WORK_DIR, { recursive: true });
@@ -244,6 +246,9 @@ app.get("/google-test", async (req, res) => {
   res.json(results);
 });
 
+// ── Voice call webhook (Telnyx) ───────────────────────────────────────────────
+app.post("/voice-call", express.json(), handleTelnyxWebhook);
+
 // ── Price alert check endpoint ────────────────────────────────────────────────
 app.post("/check-alerts", express.json(), async (req, res) => {
   if (req.headers["x-scheduled-secret"] !== process.env.SCHEDULED_SECRET) {
@@ -284,7 +289,7 @@ function send(chatId, text) {
 app.use(bot.webhookCallback("/webhook"));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, async () => {
+const server = app.listen(PORT, async () => {
   console.log(`Telegram agent running on port ${PORT}`);
   if (process.env.RENDER_URL) {
     await bot.telegram.setWebhook(`${process.env.RENDER_URL}/webhook`).catch(console.error);
@@ -303,4 +308,15 @@ app.listen(PORT, async () => {
     const stoppedAny = await stopIdleServers();
     if (stoppedAny) refreshToolRegistry();
   }, 2 * 60 * 1000).unref();
+});
+
+// ── Voice media WebSocket (/media-stream) ─────────────────────────────────────
+// Telnyx connects here to stream real-time audio for active calls
+const wss = new WebSocketServer({ noServer: true });
+server.on("upgrade", (req, socket, head) => {
+  if (req.url === "/media-stream") {
+    wss.handleUpgrade(req, socket, head, (ws) => handleMediaWebSocket(ws));
+  } else {
+    socket.destroy();
+  }
 });
