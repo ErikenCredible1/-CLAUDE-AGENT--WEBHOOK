@@ -180,12 +180,12 @@ async function autoLearn(userId, userMessage, agentResponse) {
         max_tokens: 200,
         messages: [{
           role: "user",
-          content: `Extract any NEW personal facts from this exchange worth remembering long-term.
-Return ONLY a JSON object like {"name": "Alice", "city": "London"} or {} if nothing new.
+          content: `Extract personal facts from this exchange worth remembering long-term.
+Return ONLY a JSON object like {"name": "Alice", "city": "London"} or {} if nothing to save.
 
 Only extract durable facts: name, location, job, language, timezone, preferences, recurring goals, dietary needs, or similar.
 Do NOT extract: search results, task outputs, one-off requests, or anything transient.
-${existingKeys.length ? `Already known (skip these): ${existingKeys.join(", ")}` : ""}
+${existingKeys.length ? `Already known (include only if the value has changed): ${JSON.stringify(existingFacts)}` : ""}
 
 User: ${userMessage.slice(0, 600)}
 Agent: ${agentResponse.slice(0, 600)}`,
