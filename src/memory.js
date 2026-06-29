@@ -120,23 +120,34 @@ async function summarizeOldHistory(userId) {
       .map((m) => `${m.role === "user" ? "User" : "Agent"}: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`)
       .join("\n");
 
+    const existingSummary = await r.get(`summary:${userId}`) || "";
+
+    const prompt = existingSummary
+      ? `You have a running summary of past conversations and a new batch to incorporate.
+Merge them into one concise paragraph (under 200 words) that captures the most useful long-term context:
+- Who the user is and their preferences
+- Important tasks completed
+- Ongoing goals or recurring needs
+
+Existing summary:
+${existingSummary}
+
+New conversation to merge in:
+${conversationText}`
+      : `Summarize this conversation into a compact paragraph (under 200 words) capturing:
+- Key facts the user shared about themselves
+- Important tasks completed
+- Any preferences or context useful to remember
+
+Conversation:
+${conversationText}`;
+
     const res = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
       {
         model: process.env.OPENROUTER_MODEL || "tencent/hy3-preview",
-        max_tokens: 500,
-        messages: [{
-          role: "user",
-          content: `Summarize this conversation history into a compact paragraph that captures:
-- Key facts the user shared about themselves
-- Important tasks that were completed
-- Any preferences or context that would be useful to remember
-
-Keep it under 200 words. Be factual and specific.
-
-Conversation:
-${conversationText}`,
-        }],
+        max_tokens: 300,
+        messages: [{ role: "user", content: prompt }],
       },
       { headers: { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, "Content-Type": "application/json" } }
     );
@@ -144,16 +155,58 @@ ${conversationText}`,
     const summary = res.data.choices?.[0]?.message?.content;
     if (!summary) return;
 
-    const existingSummary = await r.get(`summary:${userId}`) || "";
-    const combinedSummary = existingSummary ? `${existingSummary}\n\nMore recent: ${summary}` : summary;
-    await r.set(`summary:${userId}`, combinedSummary);
-
-    // Trim old messages — find a safe user-message boundary
+    await r.set(`summary:${userId}`, summary);
     await trimToSafeBoundary(r, key);
 
     console.log(`[Memory] Summarized history for user ${userId}`);
   } catch (err) {
     console.error("summarizeOldHistory error:", err.message);
+  }
+}
+
+// Automatically extract and save durable facts from a completed exchange.
+// Fires after every agent response — async, never blocks the reply to the user.
+async function autoLearn(userId, userMessage, agentResponse) {
+  if (!userMessage || !agentResponse || agentResponse.length < 20) return;
+
+  try {
+    const existingFacts = await loadFacts(userId);
+    const existingKeys = Object.keys(existingFacts);
+
+    const res = await axios.post(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        model: process.env.OPENROUTER_MODEL || "tencent/hy3-preview",
+        max_tokens: 200,
+        messages: [{
+          role: "user",
+          content: `Extract any NEW personal facts from this exchange worth remembering long-term.
+Return ONLY a JSON object like {"name": "Alice", "city": "London"} or {} if nothing new.
+
+Only extract durable facts: name, location, job, language, timezone, preferences, recurring goals, dietary needs, or similar.
+Do NOT extract: search results, task outputs, one-off requests, or anything transient.
+${existingKeys.length ? `Already known (skip these): ${existingKeys.join(", ")}` : ""}
+
+User: ${userMessage.slice(0, 600)}
+Agent: ${agentResponse.slice(0, 600)}`,
+        }],
+      },
+      { headers: { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, "Content-Type": "application/json" } }
+    );
+
+    const content = res.data.choices?.[0]?.message?.content || "{}";
+    const jsonMatch = content.match(/\{[\s\S]*?\}/);
+    if (!jsonMatch) return;
+
+    const facts = JSON.parse(jsonMatch[0]);
+    for (const [key, value] of Object.entries(facts)) {
+      if (key && value && typeof value === "string") {
+        await saveFact(userId, key.toLowerCase().trim(), value.trim());
+        console.log(`[Memory] Auto-learned: ${key} = ${value} for user ${userId}`);
+      }
+    }
+  } catch (err) {
+    console.error("autoLearn error:", err.message);
   }
 }
 
@@ -224,4 +277,5 @@ module.exports = {
   loadFacts,
   deleteFact,
   buildMemoryBlock,
+  autoLearn,
 };

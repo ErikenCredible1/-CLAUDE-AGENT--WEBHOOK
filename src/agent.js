@@ -2,7 +2,7 @@ const axios = require("axios");
 const { executeTool, TOOL_DEFINITIONS } = require("./tools");
 const { executeGoogleTool, GOOGLE_TOOL_DEFINITIONS } = require("./google-tools");
 const { executeMcpTool, getMcpToolDefinitions, ensureServerStarted } = require("./mcp-tools");
-const { loadHistory, saveMessage, clearHistory, saveFact, loadFacts, deleteFact, buildMemoryBlock } = require("./memory");
+const { loadHistory, saveMessage, clearHistory, saveFact, loadFacts, deleteFact, buildMemoryBlock, autoLearn } = require("./memory");
 const { safeSlice } = require("./safe-slice");
 
 // ── Lazy tool loading — see get_tool_schema below ──────────────────────────────
@@ -255,7 +255,9 @@ async function runAgent(userId, userInput, onProgress) {
     history.push(userMsg);
     await saveMessage(userId, userMsg);
 
-    return runAgentLoopWithRecovery(userId, history, userMsg, onProgress, memoryBlock);
+    const response = await runAgentLoopWithRecovery(userId, history, userMsg, onProgress, memoryBlock);
+    autoLearn(userId, userInput, response).catch(console.error);
+    return response;
   });
 }
 
