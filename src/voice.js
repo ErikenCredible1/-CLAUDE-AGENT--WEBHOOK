@@ -246,7 +246,7 @@ async function textToSpeech(text) {
   const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-preview-tts" });
 
   const result = await model.generateContent({
-    contents: [{ role: "user", parts: [{ text }] }],
+    contents: [{ role: "user", parts: [{ text: `Say the following out loud: ${text}` }] }],
     generationConfig: {
       responseModalities: ["AUDIO"],
       speechConfig: {
@@ -260,40 +260,32 @@ async function textToSpeech(text) {
   const part = result.response.candidates?.[0]?.content?.parts?.[0];
   if (!part?.inlineData?.data) throw new Error("No audio in Gemini TTS response");
 
-  // Gemini returns L16 PCM big-endian at 24kHz — downsample to 8kHz and wrap in WAV
+  // Gemini returns L16 big-endian PCM at 24kHz — swap to little-endian and wrap in WAV
   const raw = Buffer.from(part.inlineData.data, "base64");
-  const pcm8k = downsamplePcm16Be(raw, 24000, 8000);
-  return buildWav(pcm8k, 8000);
-}
-
-// Downsample big-endian PCM16 from srcRate to dstRate
-function downsamplePcm16Be(buf, srcRate, dstRate) {
-  const ratio = srcRate / dstRate;
-  const inSamples = buf.length / 2;
-  const outLen = Math.floor(inSamples / ratio);
-  const out = Buffer.alloc(outLen * 2);
-  for (let i = 0; i < outLen; i++) {
-    const srcIdx = Math.floor(i * ratio);
-    const sample = buf.readInt16BE(srcIdx * 2);
-    out.writeInt16LE(sample, i * 2); // WAV uses little-endian
+  const pcmLe = Buffer.alloc(raw.length);
+  for (let i = 0; i < raw.length - 1; i += 2) {
+    pcmLe[i] = raw[i + 1];
+    pcmLe[i + 1] = raw[i];
   }
-  return out;
+  return buildWav(pcmLe, 24000);
 }
 
 function buildWav(pcmLe, sampleRate) {
-  const header = Buffer.alloc(44);
+  const numChannels = 1;
+  const bitsPerSample = 16;
   const dataLen = pcmLe.length;
+  const header = Buffer.alloc(44);
   header.write("RIFF", 0);
   header.writeUInt32LE(36 + dataLen, 4);
   header.write("WAVE", 8);
   header.write("fmt ", 12);
   header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);               // PCM
-  header.writeUInt16LE(1, 22);               // mono
+  header.writeUInt16LE(1, 20);                                       // PCM
+  header.writeUInt16LE(numChannels, 22);
   header.writeUInt32LE(sampleRate, 24);
-  header.writeUInt32LE(sampleRate * 2, 28);  // byteRate
-  header.writeUInt16LE(2, 32);               // blockAlign
-  header.writeUInt16LE(16, 34);              // bitsPerSample
+  header.writeUInt32LE(sampleRate * numChannels * bitsPerSample / 8, 28); // byteRate
+  header.writeUInt16LE(numChannels * bitsPerSample / 8, 32);         // blockAlign
+  header.writeUInt16LE(bitsPerSample, 34);
   header.write("data", 36);
   header.writeUInt32LE(dataLen, 40);
   return Buffer.concat([header, pcmLe]);
