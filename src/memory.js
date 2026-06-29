@@ -13,7 +13,7 @@ function getRedis() {
   return redis;
 }
 
-const HISTORY_LIMIT = 15;
+const HISTORY_LIMIT = 30;
 const HISTORY_MAX   = 100;
 const SUMMARY_TRIGGER = 20;
 
