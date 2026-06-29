@@ -51,7 +51,7 @@ async function onCallAnswered({ call_control_id }) {
   const wsUrl = renderUrl.replace(/^https?:\/\//, "wss://") + "/media-stream";
   await telnyxAction(call_control_id, "streaming_start", {
     stream_url: wsUrl,
-    stream_track: "both_tracks",
+    stream_track: "inbound_track",
   });
 }
 
@@ -288,30 +288,13 @@ function encodeMulaw(s) {
 
 async function speakToCall(session, text) {
   if (!text?.trim()) return;
-
-  // Try Gemini TTS first, fall back to Telnyx built-in speak
-  try {
-    const audio = await textToSpeech(text);
-    const { ws } = session;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
-    // 20ms frames at 8kHz mulaw = 160 bytes per frame
-    const CHUNK = 160;
-    for (let i = 0; i < audio.length; i += CHUNK) {
-      ws.send(JSON.stringify({
-        event: "media",
-        media: { payload: audio.slice(i, i + CHUNK).toString("base64") },
-      }));
-    }
-    ws.send(JSON.stringify({ event: "mark", mark: { name: "tts_done" } }));
-  } catch (err) {
-    console.error("[Voice] Gemini TTS failed, using Telnyx speak:", err.message);
-    await telnyxAction(session.callControlId, "speak", {
-      payload: text,
-      voice: "female",
-      language: "en-US",
-    }).catch((e) => console.error("[Voice] Telnyx speak error:", e.message));
-  }
+  console.log(`[Voice] Speaking: "${text.slice(0, 60)}"`);
+  await telnyxAction(session.callControlId, "speak", {
+    payload: text,
+    payload_type: "text",
+    voice: "female",
+    language: "en-US",
+  }).catch((e) => console.error("[Voice] Telnyx speak error:", e.message));
 }
 
 // ── Telegram notification for missed messages ─────────────────────────────────
