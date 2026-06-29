@@ -239,11 +239,10 @@ async function textToSpeech(text) {
   if (!process.env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY not configured");
 
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-preview-tts" });
 
-  // Model name may need adjusting once key is in place — check Google AI Studio
-  // for exact name: "gemini-2.5-flash-preview-tts" or "gemini-2.5-flash"
-  const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash-preview-tts",
+  const result = await model.generateContent({
+    contents: [{ role: "user", parts: [{ text }] }],
     generationConfig: {
       responseModalities: ["AUDIO"],
       speechConfig: {
@@ -254,7 +253,6 @@ async function textToSpeech(text) {
     },
   });
 
-  const result = await model.generateContent(text);
   const part = result.response.candidates?.[0]?.content?.parts?.[0];
   if (!part?.inlineData?.data) throw new Error("No audio in Gemini TTS response");
 
@@ -290,11 +288,13 @@ function encodeMulaw(s) {
 
 async function speakToCall(session, text) {
   if (!text?.trim()) return;
-  const { ws } = session;
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
+  // Try Gemini TTS first, fall back to Telnyx built-in speak
   try {
     const audio = await textToSpeech(text);
+    const { ws } = session;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
     // 20ms frames at 8kHz mulaw = 160 bytes per frame
     const CHUNK = 160;
     for (let i = 0; i < audio.length; i += CHUNK) {
@@ -305,7 +305,12 @@ async function speakToCall(session, text) {
     }
     ws.send(JSON.stringify({ event: "mark", mark: { name: "tts_done" } }));
   } catch (err) {
-    console.error("[Voice] TTS/send error:", err.message);
+    console.error("[Voice] Gemini TTS failed, using Telnyx speak:", err.message);
+    await telnyxAction(session.callControlId, "speak", {
+      payload: text,
+      voice: "female",
+      language: "en-US",
+    }).catch((e) => console.error("[Voice] Telnyx speak error:", e.message));
   }
 }
 
