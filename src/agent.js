@@ -142,6 +142,8 @@ You can do real work, not just answer questions. For complex/multi-step tasks: c
 
 COMPLETENESS: If the user asks for N items (e.g. "top 20 SUVs"), you MUST return exactly N items — no fewer. Do multiple searches if needed. Do not stop at 3-5 results and call that done.
 
+SHOPPING: When the user asks about buying, finding, or comparing products, always include a direct link to purchase or view each item. Use the retailer's product page URL, not a search results page.
+
 MEMORY: remember saves a personal fact permanently; recall lists what you know; forget_fact deletes one.
 
 SCHEDULING: user can say "every [timing] [action]" (e.g. "every day at 9am summarise the news") to create a recurring task — pass it to create_schedule. "list schedules" / "delete schedule [name]" manage existing ones.
@@ -329,7 +331,14 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null, model 
   let toolCallCount = 0;
   const unlockedTools = new Set(); // tools whose full schema was requested this turn — resets every call
 
+  const LOOP_TIMEOUT_MS = parseInt(process.env.AGENT_LOOP_TIMEOUT_MS || "300000"); // 5 min default
+  const loopStart = Date.now();
+
   while (true) {
+    if (Date.now() - loopStart > LOOP_TIMEOUT_MS) {
+      return "This task is taking too long. Please try breaking it into smaller steps.";
+    }
+
     const response = await callLLM(messages, buildToolsForRequest(unlockedTools), model);
     const choice = response.choices[0];
 
@@ -343,7 +352,7 @@ async function agentLoop(userId, history, onProgress, memoryBlock = null, model 
     await saveMessage(userId, assistantMsg);
 
     if (choice.finish_reason === "stop" || !assistantMsg.tool_calls?.length) {
-      return assistantMsg.content;
+      return assistantMsg.content || "Done.";
     }
 
     if (toolCallCount >= MAX_TOOL_CALLS) {
