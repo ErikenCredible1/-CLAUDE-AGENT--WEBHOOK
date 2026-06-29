@@ -54,28 +54,6 @@ bot.on("photo", (ctx) => {
   });
 });
 
-// ── Voice message ────────────────────────────────────────────────────────────
-bot.on("voice", (ctx) => {
-  const userId = String(ctx.chat.id);
-  send(userId, "🎤 Got your voice message, transcribing...").catch(() => {});
-  (async () => {
-    if (!process.env.GROQ_API_KEY) {
-      return send(userId, "Voice transcription not configured (GROQ_API_KEY missing).");
-    }
-    const fileInfo = await bot.telegram.getFile(ctx.message.voice.file_id);
-    const fileUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${fileInfo.file_path}`;
-    const res = await axios.get(fileUrl, { responseType: "arraybuffer" });
-    const transcript = await transcribeVoice(Buffer.from(res.data));
-    await send(userId, `🎤 "${transcript}"\n\n⏳ Working on it...`);
-    const result = await runAgent(userId, transcript, async (p) => {
-      await send(userId, `🔧 ${p}`).catch(() => {});
-    });
-    await send(userId, result);
-  })().catch((err) => {
-    send(userId, `❌ Error processing voice: ${err.message}`).catch(() => {});
-  });
-});
-
 // ── File/document message ─────────────────────────────────────────────────────
 bot.on("document", async (ctx) => {
   const userId = String(ctx.chat.id);
@@ -300,20 +278,6 @@ function send(chatId, text) {
       bot.telegram.sendMessage(chatId, chunks.length > 1 ? `(${i + 1}/${chunks.length})\n\n${chunk}` : chunk)
     );
   }, Promise.resolve());
-}
-
-// ── Voice transcription (Groq Whisper) ───────────────────────────────────────
-async function transcribeVoice(audioBuffer) {
-  const FormData = require("form-data");
-  const form = new FormData();
-  form.append("file", audioBuffer, { filename: "voice.ogg", contentType: "audio/ogg" });
-  form.append("model", "whisper-large-v3-turbo");
-  form.append("response_format", "text");
-  const res = await axios.post("https://api.groq.com/openai/v1/audio/transcriptions", form, {
-    headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, ...form.getHeaders() },
-    timeout: 30_000,
-  });
-  return String(res.data).trim();
 }
 
 // ── Webhook setup ─────────────────────────────────────────────────────────────
