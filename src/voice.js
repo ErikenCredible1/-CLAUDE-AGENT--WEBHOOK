@@ -271,14 +271,34 @@ async function textToSpeech(text) {
   const part = result.response.candidates?.[0]?.content?.parts?.[0];
   if (!part?.inlineData?.data) throw new Error("No audio in Gemini TTS response");
 
-  // Gemini returns L16 big-endian PCM at 24kHz — swap to little-endian and wrap in WAV
+  // Gemini returns L16 big-endian PCM at 24kHz.
+  // Telnyx playback_start requires 8kHz WAV, so: swap BE→LE, then decimate 3:1.
   const raw = Buffer.from(part.inlineData.data, "base64");
-  const pcmLe = Buffer.alloc(raw.length);
-  for (let i = 0; i < raw.length - 1; i += 2) {
-    pcmLe[i] = raw[i + 1];
-    pcmLe[i + 1] = raw[i];
+  const pcmLe24k = swapBytes(raw);
+  const pcmLe8k = decimate(pcmLe24k, 3);
+  return buildWav(pcmLe8k, 8000);
+}
+
+// Swap every pair of bytes (big-endian → little-endian for int16)
+function swapBytes(buf) {
+  const out = Buffer.alloc(buf.length);
+  for (let i = 0; i < buf.length - 1; i += 2) {
+    out[i] = buf[i + 1];
+    out[i + 1] = buf[i];
   }
-  return buildWav(pcmLe, 24000);
+  return out;
+}
+
+// Decimate little-endian int16 PCM by integer factor (no anti-alias filter — fine for voice)
+function decimate(pcmLe, factor) {
+  const inSamples = pcmLe.length / 2;
+  const outSamples = Math.floor(inSamples / factor);
+  const out = Buffer.alloc(outSamples * 2);
+  for (let i = 0; i < outSamples; i++) {
+    const sample = pcmLe.readInt16LE(i * factor * 2);
+    out.writeInt16LE(sample, i * 2);
+  }
+  return out;
 }
 
 function buildWav(pcmLe, sampleRate) {
