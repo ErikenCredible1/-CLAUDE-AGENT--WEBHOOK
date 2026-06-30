@@ -276,15 +276,14 @@ async function textToSpeech(text) {
   if (!part?.inlineData?.data) throw new Error("No audio in Gemini TTS response");
 
   // Gemini returns L16 big-endian PCM at 24kHz.
-  // Swap BE→LE, decimate 3:1 to 8kHz, encode as G.711 mulaw WAV (WAVE_FORMAT_MULAW).
+  // Swap BE→LE, decimate 3:1 to 8kHz, wrap in PCM16 WAV (format 1).
+  // Telnyx supports PCM WAV only — not mulaw.
   const raw = Buffer.from(part.inlineData.data, "base64");
   const pcmLe24k = swapBytes(raw);
   const pcmLe8k = decimate(pcmLe24k, 3);
-  const mulaw = pcm16ToMulaw(pcmLe8k);
-  return buildMulawWav(mulaw, 8000);
+  return buildPcmWav(pcmLe8k, 8000);
 }
 
-// Swap every pair of bytes (big-endian → little-endian for int16)
 function swapBytes(buf) {
   const out = Buffer.alloc(buf.length);
   for (let i = 0; i < buf.length - 1; i += 2) {
@@ -294,44 +293,32 @@ function swapBytes(buf) {
   return out;
 }
 
-// Decimate little-endian int16 PCM by integer factor (no anti-alias filter — fine for voice)
 function decimate(pcmLe, factor) {
-  const inSamples = pcmLe.length / 2;
-  const outSamples = Math.floor(inSamples / factor);
+  const outSamples = Math.floor(pcmLe.length / 2 / factor);
   const out = Buffer.alloc(outSamples * 2);
   for (let i = 0; i < outSamples; i++) {
-    const sample = pcmLe.readInt16LE(i * factor * 2);
-    out.writeInt16LE(sample, i * 2);
+    out.writeInt16LE(pcmLe.readInt16LE(i * factor * 2), i * 2);
   }
   return out;
 }
 
-// G.711 mulaw WAV (WAVE_FORMAT_MULAW = 0x0007) — what Telnyx actually needs
-function buildMulawWav(mulawData, sampleRate) {
+function buildPcmWav(pcmLe, sampleRate) {
+  const byteRate = sampleRate * 2; // 16-bit mono
   const header = Buffer.alloc(44);
   header.write("RIFF", 0);
-  header.writeUInt32LE(36 + mulawData.length, 4);
+  header.writeUInt32LE(36 + pcmLe.length, 4);
   header.write("WAVE", 8);
   header.write("fmt ", 12);
   header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(7, 20);          // WAVE_FORMAT_MULAW
+  header.writeUInt16LE(1, 20);          // PCM
   header.writeUInt16LE(1, 22);          // mono
   header.writeUInt32LE(sampleRate, 24);
-  header.writeUInt32LE(sampleRate, 28); // byteRate = sampleRate * 1 * 1
-  header.writeUInt16LE(1, 32);          // blockAlign = 1 byte per sample
-  header.writeUInt16LE(8, 34);          // 8 bits per sample
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(2, 32);          // blockAlign = 2 bytes per sample
+  header.writeUInt16LE(16, 34);         // 16 bits per sample
   header.write("data", 36);
-  header.writeUInt32LE(mulawData.length, 40);
-  return Buffer.concat([header, mulawData]);
-}
-
-// Encode signed int16 LE PCM to G.711 mulaw
-function pcm16ToMulaw(pcmLe) {
-  const out = Buffer.alloc(pcmLe.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    out[i] = encodeMulaw(pcmLe.readInt16LE(i * 2));
-  }
-  return out;
+  header.writeUInt32LE(pcmLe.length, 40);
+  return Buffer.concat([header, pcmLe]);
 }
 
 function encodeMulaw(sample) {
