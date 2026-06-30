@@ -250,7 +250,7 @@ app.get("/google-test", async (req, res) => {
 app.post("/voice-call", express.json(), handleTelnyxWebhook);
 
 // ── Gemini TTS audio endpoint (fetched by Telnyx during playback_start) ──────
-app.get("/tts-audio/:id", (req, res) => {
+app.get("/tts-audio/:id.wav", (req, res) => {
   const wav = ttsCache.get(req.params.id);
   if (!wav) { console.log(`[TTS] 404 for id ${req.params.id}`); return res.status(404).send("Not found"); }
   ttsCache.delete(req.params.id);
@@ -262,7 +262,7 @@ app.get("/tts-audio/:id", (req, res) => {
 });
 
 // ── Test tone endpoint (440 Hz sine, 2 s, 8 kHz mulaw WAV) ───────────────────
-app.get("/test-audio", (req, res) => {
+function serveTestTone(req, res) {
   const rate = 8000, secs = 2, freq = 440;
   const BIAS = 0x84, CLIP = 32635;
   function encodeMu(s) {
@@ -281,7 +281,9 @@ app.get("/test-audio", (req, res) => {
   h.write("data",36); h.writeUInt32LE(mu.length,40);
   const wav = Buffer.concat([h, mu]);
   res.set("Content-Type","audio/wav"); res.set("Content-Length", wav.length); res.end(wav);
-});
+}
+app.get("/test-audio", serveTestTone);
+app.get("/test-audio.wav", serveTestTone);
 
 // ── Price alert check endpoint ────────────────────────────────────────────────
 app.post("/check-alerts", express.json(), async (req, res) => {

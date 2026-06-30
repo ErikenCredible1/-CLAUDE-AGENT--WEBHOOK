@@ -122,7 +122,7 @@ function handleMediaWebSocket(ws) {
 
       session.log.push({ role: "atlas", text: greeting });
       // DIAGNOSTIC: play test tone first to verify WAV format works
-      const testUrl = `${process.env.RENDER_URL}/test-audio`;
+      const testUrl = `${process.env.RENDER_URL}/test-audio.wav`;
       console.log(`[Voice] Playing test tone: ${testUrl}`);
       await telnyxAction(callControlId, "playback_start", { audio_url: testUrl });
       await speakToCall(session, greeting);
@@ -359,7 +359,7 @@ async function speakToCall(session, text) {
     // Auto-clean after 60s in case Telnyx never fetches
     setTimeout(() => ttsCache.delete(id), 60_000);
 
-    const audioUrl = `${process.env.RENDER_URL}/tts-audio/${id}`;
+    const audioUrl = `${process.env.RENDER_URL}/tts-audio/${id}.wav`;
     console.log(`[Voice] WAV size=${wav.length} url=${audioUrl}`);
     await telnyxAction(session.callControlId, "playback_start", {
       audio_url: audioUrl,
