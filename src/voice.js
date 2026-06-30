@@ -32,6 +32,8 @@ async function handleTelnyxWebhook(req, res) {
       await onCallInitiated(payload);
     } else if (event_type === "call.answered") {
       await onCallAnswered(payload);
+    } else if (event_type === "call.playback.ended") {
+      await onPlaybackEnded(payload);
     } else if (event_type === "call.hangup") {
       await onCallHangup(payload);
     }
@@ -51,6 +53,7 @@ async function onCallInitiated({ call_control_id, from }) {
     ws: null,
     deepgramLive: null,
     busy: false,
+    greeted: false,
   });
   // Explicitly pin the webhook URL so all subsequent events (call.answered, etc.)
   // come back to us regardless of what is set in the Telnyx portal.
@@ -62,12 +65,24 @@ async function onCallInitiated({ call_control_id, from }) {
 }
 
 async function onCallAnswered({ call_control_id }) {
-  // DIAGNOSTIC: skip streaming, test if playback_start works without it
+  const renderUrl = process.env.RENDER_URL || "https://localhost:3000";
+  const wsUrl = renderUrl.replace(/^https?:\/\//, "wss://") + "/media-stream";
+  await telnyxAction(call_control_id, "streaming_start", {
+    stream_url: wsUrl,
+    stream_track: "inbound_track",
+  });
+}
+
+async function onPlaybackEnded({ call_control_id }) {
   const session = sessions.get(call_control_id);
   if (!session) return;
-  console.log(`[Voice] Skipping streaming_start — testing playback_start alone`);
-  const testUrl = `${process.env.RENDER_URL}/test-audio.wav`;
-  await telnyxAction(call_control_id, "playback_start", { audio_url: testUrl });
+  // Restart listening after we finished speaking
+  const renderUrl = process.env.RENDER_URL || "https://localhost:3000";
+  const wsUrl = renderUrl.replace(/^https?:\/\//, "wss://") + "/media-stream";
+  await telnyxAction(call_control_id, "streaming_start", {
+    stream_url: wsUrl,
+    stream_track: "inbound_track",
+  });
 }
 
 async function onCallHangup({ call_control_id }) {
@@ -113,19 +128,21 @@ function handleMediaWebSocket(ws) {
         return;
       }
 
+      // Close any previous Deepgram connection (streaming restart after playback)
+      if (session.deepgramLive) {
+        try { session.deepgramLive.socket.close(); } catch {}
+      }
       session.ws = ws;
       session.deepgramLive = await createDeepgramStream(callControlId);
 
-      const greeting = session.isOwner
-        ? "Hey, what's up?"
-        : "Hi, this is Atlas, Erik's assistant. He's unavailable right now — can I take a message?";
-
-      session.log.push({ role: "atlas", text: greeting });
-      // DIAGNOSTIC: test external MP3 to isolate server/format vs call-setup issue
-      const testUrl = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3";
-      console.log(`[Voice] Playing external MP3: ${testUrl}`);
-      await telnyxAction(callControlId, "playback_start", { audio_url: testUrl });
-      await speakToCall(session, greeting);
+      if (!session.greeted) {
+        session.greeted = true;
+        const greeting = session.isOwner
+          ? "Hey, what's up?"
+          : "Hi, this is Atlas, Erik's assistant. He's unavailable right now — can I take a message?";
+        session.log.push({ role: "atlas", text: greeting });
+        await speakToCall(session, greeting);
+      }
       return;
     }
 
@@ -138,12 +155,18 @@ function handleMediaWebSocket(ws) {
     }
 
     if (msg.event === "stop") {
-      if (callControlId) closeSession(callControlId);
+      // Streaming stopped (either for playback or hangup) — don't close session,
+      // call.hangup webhook handles that. Just clean up Deepgram for this stream.
+      const session = callControlId ? sessions.get(callControlId) : null;
+      if (session?.deepgramLive) {
+        try { session.deepgramLive.socket.close(); } catch {}
+        session.deepgramLive = null;
+      }
     }
   });
 
   ws.on("close", () => {
-    if (callControlId) closeSession(callControlId);
+    // WebSocket closed — Deepgram already cleaned up in "stop" event above
   });
 
   ws.on("error", (err) => console.error("[Voice] WS error:", err.message));
@@ -339,11 +362,13 @@ async function speakToCall(session, text) {
   if (!text?.trim()) return;
   console.log(`[Voice] Speaking: "${text.slice(0, 60)}"`);
 
+  // Stop streaming before playback — they can't run simultaneously on Telnyx
+  await telnyxAction(session.callControlId, "streaming_stop", {}).catch(() => {});
+
   try {
     const wav = await textToSpeech(text);
     const id = crypto.randomUUID();
     ttsCache.set(id, wav);
-    // Auto-clean after 60s in case Telnyx never fetches
     setTimeout(() => ttsCache.delete(id), 60_000);
 
     const audioUrl = `${process.env.RENDER_URL}/tts-audio/${id}.wav`;
