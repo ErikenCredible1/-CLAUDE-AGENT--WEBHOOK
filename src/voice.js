@@ -272,11 +272,12 @@ async function textToSpeech(text) {
   if (!part?.inlineData?.data) throw new Error("No audio in Gemini TTS response");
 
   // Gemini returns L16 big-endian PCM at 24kHz.
-  // Telnyx playback_start requires 8kHz WAV, so: swap BE→LE, then decimate 3:1.
+  // Swap BE→LE, decimate 3:1 to 8kHz, encode as G.711 mulaw WAV (WAVE_FORMAT_MULAW).
   const raw = Buffer.from(part.inlineData.data, "base64");
   const pcmLe24k = swapBytes(raw);
   const pcmLe8k = decimate(pcmLe24k, 3);
-  return buildWav(pcmLe8k, 8000);
+  const mulaw = pcm16ToMulaw(pcmLe8k);
+  return buildMulawWav(mulaw, 8000);
 }
 
 // Swap every pair of bytes (big-endian → little-endian for int16)
@@ -301,25 +302,44 @@ function decimate(pcmLe, factor) {
   return out;
 }
 
-function buildWav(pcmLe, sampleRate) {
-  const numChannels = 1;
-  const bitsPerSample = 16;
-  const dataLen = pcmLe.length;
+// G.711 mulaw WAV (WAVE_FORMAT_MULAW = 0x0007) — what Telnyx actually needs
+function buildMulawWav(mulawData, sampleRate) {
   const header = Buffer.alloc(44);
   header.write("RIFF", 0);
-  header.writeUInt32LE(36 + dataLen, 4);
+  header.writeUInt32LE(36 + mulawData.length, 4);
   header.write("WAVE", 8);
   header.write("fmt ", 12);
   header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);                                       // PCM
-  header.writeUInt16LE(numChannels, 22);
+  header.writeUInt16LE(7, 20);          // WAVE_FORMAT_MULAW
+  header.writeUInt16LE(1, 22);          // mono
   header.writeUInt32LE(sampleRate, 24);
-  header.writeUInt32LE(sampleRate * numChannels * bitsPerSample / 8, 28); // byteRate
-  header.writeUInt16LE(numChannels * bitsPerSample / 8, 32);         // blockAlign
-  header.writeUInt16LE(bitsPerSample, 34);
+  header.writeUInt32LE(sampleRate, 28); // byteRate = sampleRate * 1 * 1
+  header.writeUInt16LE(1, 32);          // blockAlign = 1 byte per sample
+  header.writeUInt16LE(8, 34);          // 8 bits per sample
   header.write("data", 36);
-  header.writeUInt32LE(dataLen, 40);
-  return Buffer.concat([header, pcmLe]);
+  header.writeUInt32LE(mulawData.length, 40);
+  return Buffer.concat([header, mulawData]);
+}
+
+// Encode signed int16 LE PCM to G.711 mulaw
+function pcm16ToMulaw(pcmLe) {
+  const out = Buffer.alloc(pcmLe.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = encodeMulaw(pcmLe.readInt16LE(i * 2));
+  }
+  return out;
+}
+
+function encodeMulaw(sample) {
+  const BIAS = 0x84, CLIP = 32635;
+  let sign = (sample >> 8) & 0x80;
+  if (sign) sample = -sample;
+  if (sample > CLIP) sample = CLIP;
+  sample += BIAS;
+  let exp = 7;
+  for (let mask = 0x4000; !(sample & mask) && exp > 0; mask >>= 1) exp--;
+  const mantissa = (sample >> (exp + 3)) & 0x0f;
+  return ~(sign | (exp << 4) | mantissa) & 0xff;
 }
 
 // ── Serve TTS audio and play via Telnyx ──────────────────────────────────────

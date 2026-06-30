@@ -261,19 +261,25 @@ app.get("/tts-audio/:id", (req, res) => {
   res.end(wav);
 });
 
-// ── Test tone endpoint (440 Hz sine, 2 s, 8 kHz PCM) ─────────────────────────
+// ── Test tone endpoint (440 Hz sine, 2 s, 8 kHz mulaw WAV) ───────────────────
 app.get("/test-audio", (req, res) => {
   const rate = 8000, secs = 2, freq = 440;
-  const pcm = Buffer.alloc(rate * secs * 2);
-  for (let i = 0; i < rate * secs; i++) {
-    pcm.writeInt16LE(Math.round(Math.sin(2 * Math.PI * freq * i / rate) * 16000), i * 2);
+  const BIAS = 0x84, CLIP = 32635;
+  function encodeMu(s) {
+    let sign = (s >> 8) & 0x80; if (sign) s = -s;
+    if (s > CLIP) s = CLIP; s += BIAS;
+    let exp = 7; for (let m = 0x4000; !(s & m) && exp > 0; m >>= 1) exp--;
+    return ~(sign | (exp << 4) | ((s >> (exp + 3)) & 0x0f)) & 0xff;
   }
+  const mu = Buffer.alloc(rate * secs);
+  for (let i = 0; i < mu.length; i++)
+    mu[i] = encodeMu(Math.round(Math.sin(2 * Math.PI * freq * i / rate) * 16000));
   const h = Buffer.alloc(44);
-  h.write("RIFF",0); h.writeUInt32LE(36+pcm.length,4); h.write("WAVE",8);
-  h.write("fmt ",12); h.writeUInt32LE(16,16); h.writeUInt16LE(1,20); h.writeUInt16LE(1,22);
-  h.writeUInt32LE(rate,24); h.writeUInt32LE(rate*2,28); h.writeUInt16LE(2,32); h.writeUInt16LE(16,34);
-  h.write("data",36); h.writeUInt32LE(pcm.length,40);
-  const wav = Buffer.concat([h, pcm]);
+  h.write("RIFF",0); h.writeUInt32LE(36+mu.length,4); h.write("WAVE",8);
+  h.write("fmt ",12); h.writeUInt32LE(16,16); h.writeUInt16LE(7,20); h.writeUInt16LE(1,22);
+  h.writeUInt32LE(rate,24); h.writeUInt32LE(rate,28); h.writeUInt16LE(1,32); h.writeUInt16LE(8,34);
+  h.write("data",36); h.writeUInt32LE(mu.length,40);
+  const wav = Buffer.concat([h, mu]);
   res.set("Content-Type","audio/wav"); res.set("Content-Length", wav.length); res.end(wav);
 });
 
