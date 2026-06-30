@@ -17,8 +17,13 @@ const ttsCache = new Map();
 async function handleTelnyxWebhook(req, res) {
   res.sendStatus(200); // Acknowledge before async processing
 
-  const { event_type, payload } = req.body?.data || {};
-  if (!event_type || !payload) return;
+  // Log raw body so we can diagnose unexpected webhook formats
+  const raw = req.body;
+  const { event_type, payload } = raw?.data || {};
+  if (!event_type || !payload) {
+    console.log("[Voice] Unrecognised webhook body:", JSON.stringify(raw).slice(0, 300));
+    return;
+  }
 
   console.log(`[Voice] ${event_type} — ${payload.from || payload.call_control_id}`);
 
@@ -47,7 +52,13 @@ async function onCallInitiated({ call_control_id, from }) {
     deepgramLive: null,
     busy: false,
   });
-  await telnyxAction(call_control_id, "answer", {});
+  // Explicitly pin the webhook URL so all subsequent events (call.answered, etc.)
+  // come back to us regardless of what is set in the Telnyx portal.
+  const webhookUrl = `${process.env.RENDER_URL}/voice-call`;
+  await telnyxAction(call_control_id, "answer", {
+    webhook_url: webhookUrl,
+    webhook_url_method: "POST",
+  });
 }
 
 async function onCallAnswered({ call_control_id }) {
@@ -344,17 +355,24 @@ function normalizePhone(num) {
 }
 
 async function telnyxAction(callControlId, action, params) {
-  await axios.post(
-    `https://api.telnyx.com/v2/calls/${callControlId}/actions/${action}`,
-    params,
-    {
-      headers: {
-        Authorization: `Bearer ${process.env.TELNYX_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      timeout: 10_000,
-    }
-  );
+  try {
+    await axios.post(
+      `https://api.telnyx.com/v2/calls/${callControlId}/actions/${action}`,
+      params,
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.TELNYX_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 10_000,
+      }
+    );
+    console.log(`[Telnyx] ${action} OK`);
+  } catch (err) {
+    const body = err.response?.data;
+    console.error(`[Telnyx] ${action} failed ${err.response?.status}:`, JSON.stringify(body).slice(0, 400));
+    throw err;
+  }
 }
 
 module.exports = { handleTelnyxWebhook, handleMediaWebSocket, ttsCache };
