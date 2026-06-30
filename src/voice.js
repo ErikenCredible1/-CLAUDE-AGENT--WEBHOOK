@@ -121,9 +121,9 @@ function handleMediaWebSocket(ws) {
         : "Hi, this is Atlas, Erik's assistant. He's unavailable right now — can I take a message?";
 
       session.log.push({ role: "atlas", text: greeting });
-      // DIAGNOSTIC: play test tone first to verify WAV format works
-      const testUrl = `${process.env.RENDER_URL}/test-audio.wav`;
-      console.log(`[Voice] Playing test tone: ${testUrl}`);
+      // DIAGNOSTIC: test external MP3 to isolate server/format vs call-setup issue
+      const testUrl = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3";
+      console.log(`[Voice] Playing external MP3: ${testUrl}`);
       await telnyxAction(callControlId, "playback_start", { audio_url: testUrl });
       await speakToCall(session, greeting);
       return;
