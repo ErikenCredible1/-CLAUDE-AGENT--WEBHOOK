@@ -336,9 +336,9 @@ async function speakToCall(session, text) {
     setTimeout(() => ttsCache.delete(id), 60_000);
 
     const audioUrl = `${process.env.RENDER_URL}/tts-audio/${id}`;
+    console.log(`[Voice] WAV size=${wav.length} url=${audioUrl}`);
     await telnyxAction(session.callControlId, "playback_start", {
       audio_url: audioUrl,
-      overlay: false,
     });
     console.log(`[Voice] Gemini TTS playing: ${id}`);
   } catch (err) {

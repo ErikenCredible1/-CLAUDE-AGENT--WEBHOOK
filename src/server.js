@@ -252,10 +252,29 @@ app.post("/voice-call", express.json(), handleTelnyxWebhook);
 // ── Gemini TTS audio endpoint (fetched by Telnyx during playback_start) ──────
 app.get("/tts-audio/:id", (req, res) => {
   const wav = ttsCache.get(req.params.id);
-  if (!wav) return res.status(404).send("Not found");
+  if (!wav) { console.log(`[TTS] 404 for id ${req.params.id}`); return res.status(404).send("Not found"); }
   ttsCache.delete(req.params.id);
+  console.log(`[TTS] Serving WAV id=${req.params.id} size=${wav.length}`);
   res.set("Content-Type", "audio/wav");
-  res.send(wav);
+  res.set("Content-Length", wav.length);
+  res.set("Cache-Control", "no-cache");
+  res.end(wav);
+});
+
+// ── Test tone endpoint (440 Hz sine, 2 s, 8 kHz PCM) ─────────────────────────
+app.get("/test-audio", (req, res) => {
+  const rate = 8000, secs = 2, freq = 440;
+  const pcm = Buffer.alloc(rate * secs * 2);
+  for (let i = 0; i < rate * secs; i++) {
+    pcm.writeInt16LE(Math.round(Math.sin(2 * Math.PI * freq * i / rate) * 16000), i * 2);
+  }
+  const h = Buffer.alloc(44);
+  h.write("RIFF",0); h.writeUInt32LE(36+pcm.length,4); h.write("WAVE",8);
+  h.write("fmt ",12); h.writeUInt32LE(16,16); h.writeUInt16LE(1,20); h.writeUInt16LE(1,22);
+  h.writeUInt32LE(rate,24); h.writeUInt32LE(rate*2,28); h.writeUInt16LE(2,32); h.writeUInt16LE(16,34);
+  h.write("data",36); h.writeUInt32LE(pcm.length,40);
+  const wav = Buffer.concat([h, pcm]);
+  res.set("Content-Type","audio/wav"); res.set("Content-Length", wav.length); res.end(wav);
 });
 
 // ── Price alert check endpoint ────────────────────────────────────────────────
