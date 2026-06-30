@@ -121,6 +121,10 @@ function handleMediaWebSocket(ws) {
         : "Hi, this is Atlas, Erik's assistant. He's unavailable right now — can I take a message?";
 
       session.log.push({ role: "atlas", text: greeting });
+      // DIAGNOSTIC: play test tone first to verify WAV format works
+      const testUrl = `${process.env.RENDER_URL}/test-audio`;
+      console.log(`[Voice] Playing test tone: ${testUrl}`);
+      await telnyxAction(callControlId, "playback_start", { audio_url: testUrl });
       await speakToCall(session, greeting);
       return;
     }
