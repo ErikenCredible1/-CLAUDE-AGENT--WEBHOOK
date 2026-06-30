@@ -1,6 +1,5 @@
 require("dotenv").config();
 const express = require("express");
-const { WebSocketServer } = require("ws");
 const { Telegraf } = require("telegraf");
 const axios = require("axios");
 const fs = require("fs");
@@ -9,7 +8,6 @@ const { runAgent, runAgentWithImage, refreshToolRegistry, isUserBusy, requestPau
 const { createSchedule, listSchedules, deleteSchedule, parseScheduleRequest } = require("./scheduler");
 const { checkPriceAlerts } = require("./alerts");
 const { startMcpServers, stopIdleServers } = require("./mcp-tools");
-const { handleTelnyxWebhook, handleMediaWebSocket, ttsCache } = require("./voice");
 
 const WORK_DIR = path.join(__dirname, "../workspace");
 if (!fs.existsSync(WORK_DIR)) fs.mkdirSync(WORK_DIR, { recursive: true });
@@ -246,38 +244,6 @@ app.get("/google-test", async (req, res) => {
   res.json(results);
 });
 
-// ── Voice call webhook (Telnyx) ───────────────────────────────────────────────
-app.post("/voice-call", express.json(), handleTelnyxWebhook);
-
-// ── Gemini TTS audio endpoint (fetched by Telnyx during playback_start) ──────
-app.get("/tts-audio/:id.wav", (req, res) => {
-  const wav = ttsCache.get(req.params.id);
-  if (!wav) { console.log(`[TTS] 404 for id ${req.params.id}`); return res.status(404).send("Not found"); }
-  ttsCache.delete(req.params.id);
-  console.log(`[TTS] Serving WAV id=${req.params.id} size=${wav.length}`);
-  res.set("Content-Type", "audio/wav");
-  res.set("Content-Length", wav.length);
-  res.set("Cache-Control", "no-cache");
-  res.end(wav);
-});
-
-// ── Test tone endpoint (440 Hz sine, 2 s, 8 kHz mulaw WAV) ───────────────────
-function serveTestTone(req, res) {
-  const rate = 8000, secs = 2, freq = 440;
-  const pcm = Buffer.alloc(rate * secs * 2); // 16-bit samples
-  for (let i = 0; i < rate * secs; i++)
-    pcm.writeInt16LE(Math.round(Math.sin(2 * Math.PI * freq * i / rate) * 16000), i * 2);
-  const h = Buffer.alloc(44);
-  h.write("RIFF",0); h.writeUInt32LE(36+pcm.length,4); h.write("WAVE",8);
-  h.write("fmt ",12); h.writeUInt32LE(16,16); h.writeUInt16LE(1,20); h.writeUInt16LE(1,22);
-  h.writeUInt32LE(rate,24); h.writeUInt32LE(rate*2,28); h.writeUInt16LE(2,32); h.writeUInt16LE(16,34);
-  h.write("data",36); h.writeUInt32LE(pcm.length,40);
-  const wav = Buffer.concat([h, pcm]);
-  res.set("Content-Type","audio/wav"); res.set("Content-Length", wav.length); res.end(wav);
-}
-app.get("/test-audio", serveTestTone);
-app.get("/test-audio.wav", serveTestTone);
-
 // ── Price alert check endpoint ────────────────────────────────────────────────
 app.post("/check-alerts", express.json(), async (req, res) => {
   if (req.headers["x-scheduled-secret"] !== process.env.SCHEDULED_SECRET) {
@@ -339,13 +305,3 @@ const server = app.listen(PORT, async () => {
   }, 2 * 60 * 1000).unref();
 });
 
-// ── Voice media WebSocket (/media-stream) ─────────────────────────────────────
-// Telnyx connects here to stream real-time audio for active calls
-const wss = new WebSocketServer({ noServer: true });
-server.on("upgrade", (req, socket, head) => {
-  if (req.url === "/media-stream") {
-    wss.handleUpgrade(req, socket, head, (ws) => handleMediaWebSocket(ws));
-  } else {
-    socket.destroy();
-  }
-});
