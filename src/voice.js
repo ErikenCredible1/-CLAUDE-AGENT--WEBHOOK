@@ -62,12 +62,12 @@ async function onCallInitiated({ call_control_id, from }) {
 }
 
 async function onCallAnswered({ call_control_id }) {
-  const renderUrl = process.env.RENDER_URL || "https://localhost:3000";
-  const wsUrl = renderUrl.replace(/^https?:\/\//, "wss://") + "/media-stream";
-  await telnyxAction(call_control_id, "streaming_start", {
-    stream_url: wsUrl,
-    stream_track: "inbound_track",
-  });
+  // DIAGNOSTIC: skip streaming, test if playback_start works without it
+  const session = sessions.get(call_control_id);
+  if (!session) return;
+  console.log(`[Voice] Skipping streaming_start — testing playback_start alone`);
+  const testUrl = `${process.env.RENDER_URL}/test-audio.wav`;
+  await telnyxAction(call_control_id, "playback_start", { audio_url: testUrl });
 }
 
 async function onCallHangup({ call_control_id }) {
