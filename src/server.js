@@ -7,6 +7,7 @@ const path = require("path");
 const { runAgent, runAgentWithImage, refreshToolRegistry, isUserBusy, requestPause } = require("./agent");
 const { createSchedule, listSchedules, deleteSchedule, parseScheduleRequest } = require("./scheduler");
 const { checkPriceAlerts } = require("./alerts");
+const { checkAllMonitors } = require("./monitor");
 const { startMcpServers, stopIdleServers } = require("./mcp-tools");
 
 const WORK_DIR = path.join(__dirname, "../workspace");
@@ -315,5 +316,10 @@ const server = app.listen(PORT, async () => {
     const stoppedAny = await stopIdleServers();
     if (stoppedAny) refreshToolRegistry();
   }, 2 * 60 * 1000).unref();
+
+  // Check monitors every hour — notify user if any watched URL or keyword changed
+  setInterval(() => {
+    checkAllMonitors(send).catch(err => console.error("[monitor] check error:", err.message));
+  }, 60 * 60 * 1000).unref();
 });
 

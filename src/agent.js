@@ -4,6 +4,7 @@ const { executeGoogleTool, GOOGLE_TOOL_DEFINITIONS } = require("./google-tools")
 const { executeMcpTool, getMcpToolDefinitions, ensureServerStarted } = require("./mcp-tools");
 const { loadHistory, saveMessage, clearHistory, saveFact, loadFacts, deleteFact, buildMemoryBlock, autoLearn } = require("./memory");
 const { safeSlice } = require("./safe-slice");
+const { getOverdueTasks } = require("./tasks");
 
 // ── Lazy tool loading — see get_tool_schema below ──────────────────────────────
 // Full schemas cost ~15k tokens/request if all sent upfront. Instead the model
@@ -128,17 +129,18 @@ function isClearCommand(text) {
   return ["forget", "clear", "reset", "start", "clearhistory", "clear history"].includes(normalized);
 }
 
-function getSystemPrompt(memoryBlock = null) {
+function getSystemPrompt(memoryBlock = null, overdueBlock = null) {
   const today = new Date().toLocaleDateString("en-US", {
     weekday: "long", year: "numeric", month: "long", day: "numeric",
   });
 
   const memorySection = memoryBlock ? `\n\nMEMORY:\n${memoryBlock}\n` : "";
+  const overdueSection = overdueBlock ? `\n\n⚠️ OVERDUE TASKS — mention these proactively if relevant:\n${overdueBlock}\n` : "";
 
   return `You are a powerful Personal AI Agent running on Telegram. You do real work — not just answer questions. You are accurate when it matters, creative when it helps, and proactive always.
 
 Today's date is ${today}. Always use this date when reasoning about current events, news, prices, schedules, or anything time-sensitive.
-${memorySection}
+${memorySection}${overdueSection}
 Core principle: Lack of certainty is not a reason to withhold useful help. Provide the best answer supported by available information, and mark uncertainty clearly where it exists. Refusing to answer is rarely the right move — a well-labeled "here's my best read" almost always beats "I can't be sure."
 
 ---
@@ -274,6 +276,10 @@ MEMORY: You automatically learn personal facts from conversation (name, location
 
 SCHEDULING: User can say "every [timing] [action]" (e.g. "every day at 9am summarise the news") to create a recurring task — pass it to create_schedule. "list schedules" / "delete schedule [name]" manage existing ones.
 
+TASK INBOX: You manage a persistent task inbox for the user. Proactively suggest creating a task when the user mentions something they need to do or follow up on. Use create_task, list_tasks, update_task, complete_task, delete_task. Always include the task ID when listing so the user can reference it. Surface overdue tasks naturally when they are relevant to the conversation.
+
+MONITORS: You can watch URLs and keywords for changes and alert the user automatically. Use add_monitor to set one up, list_monitors to show what's active, delete_monitor to remove one. Checks run every hour.
+
 TOOLS AVAILABLE:
 You do not see full tool schemas upfront — call get_tool_schema with a tool's exact name to get its parameters before calling it for the first time this conversation turn. get_tool_schema itself needs no lookup.
 
@@ -337,11 +343,11 @@ const FALLBACK_CHAIN = [
   process.env.OPENROUTER_FALLBACK_MODEL_2 || "xiaomi/mimo-v2.5",
 ];
 
-async function runAgentLoopWithRecovery(userId, history, userMsg, onProgress, memoryBlock) {
+async function runAgentLoopWithRecovery(userId, history, userMsg, onProgress, memoryBlock, overdueBlock = null) {
   let lastErr;
   for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
     try {
-      return await agentLoop(userId, history, onProgress, memoryBlock);
+      return await agentLoop(userId, history, onProgress, memoryBlock, null, overdueBlock);
     } catch (err) {
       const isRateLimited = err.message.includes("(429)");
       const isRetryable = isRateLimited || err.message.includes("(400)") || err.message.includes("(422)") || err.message.includes("(504)");
@@ -357,7 +363,7 @@ async function runAgentLoopWithRecovery(userId, history, userMsg, onProgress, me
   for (const fallbackModel of FALLBACK_CHAIN) {
     console.warn(`[recovery] primary model exhausted for ${userId}: ${lastErr.message} — trying fallback model ${fallbackModel}`);
     try {
-      return await agentLoop(userId, history, onProgress, memoryBlock, fallbackModel);
+      return await agentLoop(userId, history, onProgress, memoryBlock, fallbackModel, overdueBlock);
     } catch (err) {
       console.warn(`[recovery] fallback model ${fallbackModel} also failed for ${userId}: ${err.message}`);
       lastErr = err;
@@ -368,6 +374,56 @@ async function runAgentLoopWithRecovery(userId, history, userMsg, onProgress, me
   return "Sorry — I'm having trouble reaching the AI model right now (upstream rate-limit or a temporary error). Your conversation history is untouched — please try again in a minute.";
 }
 
+async function buildOverdueBlock(userId) {
+  try {
+    const overdue = await getOverdueTasks(userId);
+    if (!overdue.length) return null;
+    return overdue.map(t => `- [${t.priority.toUpperCase()}] ${t.title}${t.due_date ? ` (was due ${t.due_date})` : ""} | ID: ${t.id}`).join("\n");
+  } catch {
+    return null;
+  }
+}
+
+async function maybeSummarizeHistory(history, model) {
+  const SUMMARIZE_THRESHOLD = 28;
+  const KEEP_RECENT = 14;
+
+  if (history.length <= SUMMARIZE_THRESHOLD) return history;
+
+  const toSummarize = history.slice(0, history.length - KEEP_RECENT);
+  const recent = history.slice(history.length - KEEP_RECENT);
+
+  try {
+    const text = toSummarize
+      .filter(m => m.role === "user" || m.role === "assistant")
+      .map(m => `${m.role}: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`)
+      .join("\n");
+
+    const res = await axios.post(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        model: model || process.env.OPENROUTER_MODEL || "tencent/hy3-preview",
+        messages: [
+          { role: "system", content: "Summarize the following conversation history in 150–250 words. Focus on decisions made, tasks mentioned, facts established, and any unresolved questions. Be factual and concise." },
+          { role: "user", content: text },
+        ],
+        max_tokens: 400,
+      },
+      { headers: { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, "Content-Type": "application/json" } }
+    );
+    const summary = res.data?.choices?.[0]?.message?.content;
+    if (!summary) return history;
+
+    return [
+      { role: "system", content: `[Earlier conversation summary]\n${summary}` },
+      ...recent,
+    ];
+  } catch (err) {
+    console.warn("[summarize] failed, using full history:", err.message);
+    return history;
+  }
+}
+
 async function runAgent(userId, userInput, onProgress) {
   return withUserLock(userId, async () => {
     if (isClearCommand(userInput)) {
@@ -375,13 +431,18 @@ async function runAgent(userId, userInput, onProgress) {
       return "🧹 Conversation cleared! Starting fresh.";
     }
 
-    const memoryBlock = await buildMemoryBlock(userId);
+    const [memoryBlock, overdueBlock] = await Promise.all([
+      buildMemoryBlock(userId),
+      buildOverdueBlock(userId),
+    ]);
+
     const userMsg = { role: "user", content: userInput };
     let history = await loadHistory(userId);
+    history = await maybeSummarizeHistory(history);
     history.push(userMsg);
     await saveMessage(userId, userMsg);
 
-    const response = await runAgentLoopWithRecovery(userId, history, userMsg, onProgress, memoryBlock);
+    const response = await runAgentLoopWithRecovery(userId, history, userMsg, onProgress, memoryBlock, overdueBlock);
     autoLearn(userId, userInput, response).catch(console.error);
     return response;
   });
@@ -451,9 +512,9 @@ async function runAgentWithImage(userId, imageBuffer, caption, onProgress) {
   });
 }
 
-async function agentLoop(userId, history, onProgress, memoryBlock = null, model = null) {
+async function agentLoop(userId, history, onProgress, memoryBlock = null, model = null, overdueBlock = null) {
   const messages = [
-    { role: "system", content: getSystemPrompt(memoryBlock) },
+    { role: "system", content: getSystemPrompt(memoryBlock, overdueBlock) },
     ...history,
   ];
 
@@ -715,6 +776,14 @@ function describeToolCall(name, args) {
     case "recall":                 return `Recalling facts about you...`;
     case "forget_fact":            return `Forgetting: ${args.key}...`;
     case "create_pdf":             return `Creating PDF: ${args.filename}...`;
+    case "create_task":            return `Adding task: ${args.title}...`;
+    case "list_tasks":             return `Checking task inbox...`;
+    case "update_task":            return `Updating task...`;
+    case "complete_task":          return `Marking task complete...`;
+    case "delete_task":            return `Deleting task...`;
+    case "add_monitor":            return `Setting up monitor: ${args.label}...`;
+    case "list_monitors":          return `Checking monitors...`;
+    case "delete_monitor":         return `Removing monitor...`;
     default:                       return `Using tool: ${name}`;
   }
 }

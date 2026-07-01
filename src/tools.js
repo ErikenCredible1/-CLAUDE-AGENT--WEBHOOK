@@ -252,6 +252,124 @@ const TOOL_DEFINITIONS = [
       },
     },
   },
+  // ── Task inbox ────────────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "create_task",
+      description: "Add a task to the user's persistent task inbox. Use when the user mentions something they need to do, follow up on, or track — even if they don't explicitly say 'add a task'.",
+      parameters: {
+        type: "object",
+        properties: {
+          title:    { type: "string", description: "Short task title" },
+          notes:    { type: "string", description: "Optional extra detail or context" },
+          priority: { type: "string", enum: ["high", "medium", "low"], description: "Task priority" },
+          due_date: { type: "string", description: "Optional due date in YYYY-MM-DD format" },
+        },
+        required: ["title", "priority"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_tasks",
+      description: "List tasks from the user's task inbox. Use when user asks what's on their plate, what's pending, what's overdue, or to review their tasks.",
+      parameters: {
+        type: "object",
+        properties: {
+          filter: { type: "string", enum: ["pending", "overdue", "done", "all"], description: "Which tasks to show. Default: pending" },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_task",
+      description: "Update a task's details, status, priority, due date, or notes. Get the task_id from list_tasks first.",
+      parameters: {
+        type: "object",
+        properties: {
+          task_id:  { type: "string", description: "The task ID from list_tasks" },
+          title:    { type: "string", description: "New title" },
+          notes:    { type: "string", description: "New or updated notes" },
+          priority: { type: "string", enum: ["high", "medium", "low"] },
+          due_date: { type: "string", description: "New due date in YYYY-MM-DD format" },
+          status:   { type: "string", enum: ["pending", "in_progress", "done"] },
+        },
+        required: ["task_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "complete_task",
+      description: "Mark a task as done. Get the task_id from list_tasks first.",
+      parameters: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "The task ID from list_tasks" },
+        },
+        required: ["task_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_task",
+      description: "Permanently remove a task. Get the task_id from list_tasks first.",
+      parameters: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "The task ID from list_tasks" },
+        },
+        required: ["task_id"],
+      },
+    },
+  },
+  // ── Monitors ──────────────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "add_monitor",
+      description: "Watch a URL or keyword for changes. When content changes, the user gets a Telegram notification automatically. Use for: watching a product page, tracking a news topic, monitoring a competitor site.",
+      parameters: {
+        type: "object",
+        properties: {
+          type:   { type: "string", enum: ["url", "keyword"], description: "url: watch a webpage for changes. keyword: watch news for a search term." },
+          target: { type: "string", description: "The URL to watch, or the keyword/phrase to track in news" },
+          label:  { type: "string", description: "Friendly name for this monitor, e.g. 'Tesla stock news' or 'iPhone 17 price drop'" },
+        },
+        required: ["type", "target", "label"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_monitors",
+      description: "List all active monitors — URLs and keywords being watched for changes.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_monitor",
+      description: "Stop watching a URL or keyword. Get the monitor_id from list_monitors first.",
+      parameters: {
+        type: "object",
+        properties: {
+          monitor_id: { type: "string", description: "The monitor ID from list_monitors" },
+        },
+        required: ["monitor_id"],
+      },
+    },
+  },
 ];
 
 // ─── Tool implementations ─────────────────────────────────────────────────────
@@ -268,6 +386,61 @@ async function executeTool(name, args, userId = "default") {
     case "fetch_browserless":  return await fetchBrowserless(args.url, args.script);
     case "read_uploaded_file":return await readUploadedFile(args.filename);
     case "plan_task":         return planTask(args.task, args.steps);
+    // Task inbox
+    case "create_task": {
+      const { createTask } = require("./tasks");
+      const task = await createTask(userId, args);
+      return `Task created: "${task.title}" [${task.priority} priority]${task.due_date ? ` — due ${task.due_date}` : ""}. ID: ${task.id}`;
+    }
+    case "list_tasks": {
+      const { listTasks } = require("./tasks");
+      const tasks = await listTasks(userId, args.filter || "pending");
+      if (!tasks.length) return args.filter === "overdue" ? "No overdue tasks." : "No tasks found.";
+      const now = new Date();
+      return tasks.map((t, i) => {
+        const overdue = t.due_date && new Date(t.due_date) < now && t.status !== "done" ? " ⚠️ OVERDUE" : "";
+        const due = t.due_date ? ` | due ${t.due_date}${overdue}` : "";
+        const notes = t.notes ? `\n   Notes: ${t.notes}` : "";
+        return `${i + 1}. [${t.priority.toUpperCase()}] ${t.status === "done" ? "✅ " : ""}${t.title}${due}\n   ID: ${t.id}${notes}`;
+      }).join("\n\n");
+    }
+    case "update_task": {
+      const { updateTask } = require("./tasks");
+      const { task_id, ...updates } = args;
+      const task = await updateTask(userId, task_id, updates);
+      if (!task) return `Task ${task_id} not found.`;
+      return `Updated: "${task.title}" — status: ${task.status}, priority: ${task.priority}${task.due_date ? `, due: ${task.due_date}` : ""}`;
+    }
+    case "complete_task": {
+      const { updateTask } = require("./tasks");
+      const task = await updateTask(userId, args.task_id, { status: "done" });
+      if (!task) return `Task ${args.task_id} not found.`;
+      return `✅ Marked complete: "${task.title}"`;
+    }
+    case "delete_task": {
+      const { deleteTask } = require("./tasks");
+      const deleted = await deleteTask(userId, args.task_id);
+      return deleted ? `Deleted task ${args.task_id}.` : `Task ${args.task_id} not found.`;
+    }
+    // Monitors
+    case "add_monitor": {
+      const { addMonitor } = require("./monitor");
+      const mon = await addMonitor(userId, args);
+      return `Monitor created: "${mon.label}" watching ${mon.type === "url" ? mon.target : `keyword "${mon.target}"`}. ID: ${mon.id}`;
+    }
+    case "list_monitors": {
+      const { listMonitors } = require("./monitor");
+      const monitors = await listMonitors(userId);
+      if (!monitors.length) return "No active monitors.";
+      return monitors.map((m, i) =>
+        `${i + 1}. [${m.type}] ${m.label}\n   Target: ${m.target}\n   Last checked: ${m.last_checked || "never"}\n   ID: ${m.id}`
+      ).join("\n\n");
+    }
+    case "delete_monitor": {
+      const { deleteMonitor } = require("./monitor");
+      const deleted = await deleteMonitor(userId, args.monitor_id);
+      return deleted ? `Deleted monitor ${args.monitor_id}.` : `Monitor ${args.monitor_id} not found.`;
+    }
     case "create_pdf":        return await createPdf(args.filename, args.title, args.content);
     case "remember": {
       const { saveFact } = require("./memory");
