@@ -78,7 +78,12 @@ async function listSchedules(userId) {
   });
 
   const items = await redis.lrange(`schedules:${userId}`, 0, -1);
-  return items.map((i) => (typeof i === "string" ? JSON.parse(i) : i));
+  console.log(`[scheduler] lrange returned ${items.length} items for ${userId}:`, JSON.stringify(items).slice(0, 200));
+  return items.map((i) => {
+    if (typeof i === "string") return JSON.parse(i);
+    if (i && typeof i === "object") return i;
+    return null;
+  }).filter(Boolean);
 }
 
 /**

@@ -168,18 +168,30 @@ app.post("/scheduled", express.json(), async (req, res) => {
 // ── QStash test endpoint ──────────────────────────────────────────────────────
 app.get("/qstash-test", async (req, res) => {
   const { Client } = require("@upstash/qstash");
+  const { listSchedules } = require("./scheduler");
   const results = {};
   results.env = {
     QSTASH_TOKEN: process.env.QSTASH_TOKEN ? "✅ set" : "❌ missing",
+    UPSTASH_REDIS_URL: process.env.UPSTASH_REDIS_URL ? "✅ set" : "❌ missing",
+    UPSTASH_REDIS_TOKEN: process.env.UPSTASH_REDIS_TOKEN ? "✅ set" : "❌ missing",
     RENDER_URL: process.env.RENDER_URL || "❌ missing",
   };
   try {
     const q = new Client({ token: process.env.QSTASH_TOKEN, baseUrl: process.env.QSTASH_URL });
     const schedules = await q.schedules.list();
-    results.connection = "✅ QStash connected";
-    results.scheduleCount = schedules.length;
+    results.qstash = "✅ connected";
+    results.qstashScheduleCount = schedules.length;
   } catch (err) {
-    results.connection = `❌ ${err.message}`;
+    results.qstash = `❌ ${err.message}`;
+  }
+  try {
+    const userId = process.env.TELEGRAM_USER_ID || "test";
+    const schedules = await listSchedules(userId);
+    results.redis = "✅ connected";
+    results.redisScheduleCount = schedules.length;
+    results.redisSchedules = schedules;
+  } catch (err) {
+    results.redis = `❌ ${err.message}`;
   }
   res.json(results);
 });
