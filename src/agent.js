@@ -280,6 +280,10 @@ TASK INBOX: You manage a persistent task inbox for the user. Proactively suggest
 
 MONITORS: You can watch URLs and keywords for changes and alert the user automatically. Use add_monitor to set one up, list_monitors to show what's active, delete_monitor to remove one. Checks run every hour.
 
+PROJECTS: For multi-step goals that require research, analysis, writing, or code across multiple phases, use create_project. The agent will automatically break the goal into tasks and execute them every 30 minutes using specialist sub-agents, sending Telegram updates as each task completes. Use list_projects to check progress, get_project to see full results, delete_project to cancel.
+
+SUB-AGENTS: Use spawn_agent to delegate focused work to a specialist — researcher (deep web research), coder (write and run code), analyst (compare and recommend), writer (draft documents). Use this when a task benefits from dedicated specialist attention rather than handling it yourself inline.
+
 TOOLS AVAILABLE:
 You do not see full tool schemas upfront — call get_tool_schema with a tool's exact name to get its parameters before calling it for the first time this conversation turn. get_tool_schema itself needs no lookup.
 
@@ -784,6 +788,11 @@ function describeToolCall(name, args) {
     case "add_monitor":            return `Setting up monitor: ${args.label}...`;
     case "list_monitors":          return `Checking monitors...`;
     case "delete_monitor":         return `Removing monitor...`;
+    case "create_project":         return `Creating project: ${args.title}...`;
+    case "list_projects":          return `Checking projects...`;
+    case "get_project":            return `Loading project details...`;
+    case "delete_project":         return `Deleting project...`;
+    case "spawn_agent":            return `Spawning ${args.role} specialist...`;
     default:                       return `Using tool: ${name}`;
   }
 }

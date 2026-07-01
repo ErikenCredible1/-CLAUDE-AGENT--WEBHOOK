@@ -8,6 +8,7 @@ const { runAgent, runAgentWithImage, refreshToolRegistry, isUserBusy, requestPau
 const { createSchedule, listSchedules, deleteSchedule, parseScheduleRequest } = require("./scheduler");
 const { checkPriceAlerts } = require("./alerts");
 const { checkAllMonitors } = require("./monitor");
+const { runAllProjectTasks } = require("./projects");
 const { startMcpServers, stopIdleServers } = require("./mcp-tools");
 
 const WORK_DIR = path.join(__dirname, "../workspace");
@@ -321,5 +322,10 @@ const server = app.listen(PORT, async () => {
   setInterval(() => {
     checkAllMonitors(send).catch(err => console.error("[monitor] check error:", err.message));
   }, 60 * 60 * 1000).unref();
+
+  // Execute next pending task for all active projects every 30 minutes
+  setInterval(() => {
+    runAllProjectTasks(send).catch(err => console.error("[project] auto-exec error:", err.message));
+  }, 30 * 60 * 1000).unref();
 });
 

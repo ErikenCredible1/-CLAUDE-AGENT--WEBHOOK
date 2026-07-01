@@ -370,6 +370,86 @@ const TOOL_DEFINITIONS = [
       },
     },
   },
+  // ── Projects ──────────────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "create_project",
+      description: "Create a multi-step autonomous project. The agent breaks the goal into sub-tasks and executes them automatically in the background every 30 minutes, reporting progress via Telegram. Use for goals that take multiple steps or research phases to complete.",
+      parameters: {
+        type: "object",
+        properties: {
+          title:    { type: "string", description: "Short project name" },
+          goal:     { type: "string", description: "Full description of what needs to be accomplished" },
+          deadline: { type: "string", description: "Optional deadline in YYYY-MM-DD format" },
+        },
+        required: ["title", "goal"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_projects",
+      description: "List autonomous projects and their progress.",
+      parameters: {
+        type: "object",
+        properties: {
+          filter: { type: "string", enum: ["active", "done", "failed", "all"], description: "Default: active" },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_project",
+      description: "Get full details of a project including all task results. Use when user wants to see what the agent found or produced.",
+      parameters: {
+        type: "object",
+        properties: {
+          project_id: { type: "string", description: "The project ID from list_projects" },
+        },
+        required: ["project_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_project",
+      description: "Cancel and remove a project.",
+      parameters: {
+        type: "object",
+        properties: {
+          project_id: { type: "string", description: "The project ID from list_projects" },
+        },
+        required: ["project_id"],
+      },
+    },
+  },
+  // ── Sub-agents ────────────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "spawn_agent",
+      description: "Delegate a focused task to a specialist sub-agent and get the result back. Use when a task benefits from a dedicated specialist: deep research, writing a document, running code analysis, or producing a structured report. The sub-agent runs independently with its own tool access.",
+      parameters: {
+        type: "object",
+        properties: {
+          role: {
+            type: "string",
+            enum: ["researcher", "coder", "analyst", "writer"],
+            description: "researcher: deep web research and synthesis. coder: write and execute code. analyst: compare, evaluate, and recommend. writer: draft documents, emails, or reports.",
+          },
+          task:    { type: "string", description: "Clear description of what the specialist should do" },
+          context: { type: "string", description: "Optional background context or data the specialist needs" },
+        },
+        required: ["role", "task"],
+      },
+    },
+  },
 ];
 
 // ─── Tool implementations ─────────────────────────────────────────────────────
@@ -440,6 +520,46 @@ async function executeTool(name, args, userId = "default") {
       const { deleteMonitor } = require("./monitor");
       const deleted = await deleteMonitor(userId, args.monitor_id);
       return deleted ? `Deleted monitor ${args.monitor_id}.` : `Monitor ${args.monitor_id} not found.`;
+    }
+    // Projects
+    case "create_project": {
+      const { createProject } = require("./projects");
+      const project = await createProject(userId, args);
+      const taskList = project.tasks.map((t, i) => `${i + 1}. ${t.title}`).join("\n");
+      return `Project created: "${project.title}"\n\nBreaking it into ${project.tasks.length} tasks:\n${taskList}\n\nID: ${project.id}\n\nI'll work through these automatically every 30 minutes and update you on progress.`;
+    }
+    case "list_projects": {
+      const { listProjects } = require("./projects");
+      const projects = await listProjects(userId, args.filter || "active");
+      if (!projects.length) return "No projects found.";
+      return projects.map((p, i) => {
+        const done = p.tasks.filter(t => t.status === "done").length;
+        const total = p.tasks.length;
+        const bar = `${done}/${total} tasks done`;
+        return `${i + 1}. [${p.status.toUpperCase()}] ${p.title}\n   ${bar}${p.deadline ? ` | deadline: ${p.deadline}` : ""}\n   ID: ${p.id}`;
+      }).join("\n\n");
+    }
+    case "get_project": {
+      const { getProject } = require("./projects");
+      const project = await getProject(userId, args.project_id);
+      if (!project) return `Project ${args.project_id} not found.`;
+      const tasks = project.tasks.map((t, i) => {
+        const status = t.status === "done" ? "✅" : t.status === "failed" ? "❌" : t.status === "in_progress" ? "⏳" : "⬜";
+        const result = t.result ? `\n   Result: ${t.result.slice(0, 300)}${t.result.length > 300 ? "..." : ""}` : "";
+        return `${status} ${i + 1}. ${t.title}${result}`;
+      }).join("\n\n");
+      return `Project: ${project.title}\nGoal: ${project.goal}\nStatus: ${project.status}\n\nTasks:\n${tasks}`;
+    }
+    case "delete_project": {
+      const { deleteProject } = require("./projects");
+      const deleted = await deleteProject(userId, args.project_id);
+      return deleted ? `Project ${args.project_id} deleted.` : `Project ${args.project_id} not found.`;
+    }
+    // Sub-agents
+    case "spawn_agent": {
+      const { runSubAgent } = require("./subagent");
+      const result = await runSubAgent(args.role, args.task, args.context || "", userId);
+      return result;
     }
     case "create_pdf":        return await createPdf(args.filename, args.title, args.content);
     case "remember": {
