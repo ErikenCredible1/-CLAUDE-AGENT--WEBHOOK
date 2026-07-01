@@ -28,8 +28,10 @@ async function createSchedule(userId, taskPrompt, cron, label) {
 
   const existing = await q.schedules.list().catch(() => []);
   if (existing.length >= QSTASH_SCHEDULE_LIMIT) {
-    const names = await listSchedules(userId);
-    const nameList = names.map((s, i) => `${i + 1}. ${s.label}`).join("\n");
+    const names = await listSchedules(userId).catch(() => []);
+    const nameList = names.length
+      ? names.map((s, i) => `${i + 1}. ${s.label}`).join("\n")
+      : "(could not load schedule names)";
     throw new Error(
       `Schedule limit reached (${existing.length}/${QSTASH_SCHEDULE_LIMIT} on free plan).\n\nYour active schedules:\n${nameList}\n\nDelete one with: delete schedule [name]`
     );
@@ -76,7 +78,7 @@ async function listSchedules(userId) {
   });
 
   const items = await redis.lrange(`schedules:${userId}`, 0, -1);
-  return items.map((i) => JSON.parse(i));
+  return items.map((i) => (typeof i === "string" ? JSON.parse(i) : i));
 }
 
 /**
@@ -91,7 +93,7 @@ async function deleteSchedule(userId, identifier) {
 
   const key = `schedules:${userId}`;
   const items = await redis.lrange(key, 0, -1);
-  const schedules = items.map((i) => JSON.parse(i));
+  const schedules = items.map((i) => (typeof i === "string" ? JSON.parse(i) : i));
 
   // Find by label or scheduleId
   const match = schedules.find(
