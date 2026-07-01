@@ -20,7 +20,7 @@ function getQStash() {
  * @param {string} label - friendly name e.g. "Monday news summary"
  * @returns {string} scheduleId
  */
-const QSTASH_SCHEDULE_LIMIT = 5;
+const QSTASH_SCHEDULE_LIMIT = 10;
 
 async function createSchedule(userId, taskPrompt, cron, label) {
   const q = getQStash();
@@ -80,8 +80,12 @@ async function listSchedules(userId) {
   const items = await redis.lrange(`schedules:${userId}`, 0, -1);
   console.log(`[scheduler] lrange returned ${items.length} items for ${userId}:`, JSON.stringify(items).slice(0, 200));
   return items.map((i) => {
-    if (typeof i === "string") return JSON.parse(i);
-    if (i && typeof i === "object") return i;
+    try {
+      if (typeof i === "string") return JSON.parse(i);
+      if (i && typeof i === "object") return i;
+    } catch {
+      console.warn("[scheduler] skipping malformed Redis entry:", String(i).slice(0, 80));
+    }
     return null;
   }).filter(Boolean);
 }
