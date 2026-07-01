@@ -29,22 +29,8 @@ const TOOL_DEFINITIONS = [
   {
     type: "function",
     function: {
-      name: "run_js",
-      description: "Execute a short JavaScript (Node.js) one-liner/snippet directly and return stdout. Only for trivial code (a quick calculation, a few lines). For anything substantial -- data processing, multi-step logic, comparisons, anything beyond ~5 lines -- use write_and_run_js instead, which is much more reliable.",
-      parameters: {
-        type: "object",
-        properties: {
-          code: { type: "string", description: "Short Node.js code to execute." },
-        },
-        required: ["code"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "write_and_run_js",
-      description: "Describe a coding task in plain English and a separate code-specialist model writes and runs the JavaScript for you, returning the output. Use this instead of run_js for any real code -- data processing, calculations over fetched data, multi-step logic, anything beyond a trivial one-liner.",
+      description: "Describe a coding task in plain English and a separate code-specialist model writes and runs the JavaScript for you, returning the output. Use for any computation, data processing, calculations, multi-step logic, or anything that requires code.",
       parameters: {
         type: "object",
         properties: {
@@ -273,7 +259,6 @@ const TOOL_DEFINITIONS = [
 async function executeTool(name, args, userId = "default") {
   switch (name) {
     case "web_search":        return await webSearch(args.query);
-    case "run_js":            return runJs(args.code);
     case "write_and_run_js":  return await writeAndRunJs(args.task);
     case "get_stock_price":   return await getStockPrice(args.symbol);
     case "get_crypto_price":  return await getCryptoPrice(args.coin);

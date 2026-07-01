@@ -685,7 +685,7 @@ function describeToolCall(name, args) {
     case "enable_browser_automation": return `Starting browser automation...`;
     case "enable_flight_search":    return `Starting flight search...`;
     case "web_search":             return `Searching: "${args.query}"`;
-    case "run_js":                 return `Running code...`;
+    case "write_and_run_js":       return `Writing and running code...`;
     case "fetch_html":
     case "fetch_markdown":
     case "fetch_txt":
