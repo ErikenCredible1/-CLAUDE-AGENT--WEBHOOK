@@ -116,8 +116,22 @@ const TOOL_DEFINITIONS = [
   {
     type: "function",
     function: {
+      name: "fetch_readable",
+      description: "Fetch a URL via plain HTTP and return clean readable text. Fastest and free — try this first for any URL. Falls back to fetch_jina if the page is JS-rendered and this returns empty or garbled content.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "The URL to fetch" },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "fetch_jina",
-      description: "Fetch a URL via Jina Reader and return clean readable content. Handles JavaScript-rendered pages. Free with no API key. Use this BEFORE firecrawl_scrape or enable_browser_automation — try fetch_readable first for simple pages, then this for JS-heavy ones.",
+      description: "Fetch a URL via Jina Reader — handles JavaScript-rendered pages. Use when fetch_readable returns empty or garbled content. Free, no API key needed.",
       parameters: {
         type: "object",
         properties: {
@@ -146,7 +160,7 @@ const TOOL_DEFINITIONS = [
     type: "function",
     function: {
       name: "plan_task",
-      description: "Break a complex multi-step task into a structured plan before executing it. Use this first for any task that requires more than 3 steps.",
+      description: "Show the user a structured plan before starting. Use when: (1) the user explicitly asks to see a plan, or (2) the task has more than 7 steps and is complex enough that the user should approve the approach before execution begins (e.g. building something, a multi-day project, a major decision). Do NOT call this for routine tasks under 7 steps — plan those internally and execute immediately.",
       parameters: {
         type: "object",
         properties: {
@@ -264,6 +278,7 @@ async function executeTool(name, args, userId = "default") {
     case "get_stock_price":   return await getStockPrice(args.symbol);
     case "get_crypto_price":  return await getCryptoPrice(args.coin);
     case "set_price_alert":   return await setPriceAlert(args.symbol, args.type, args.condition, args.target);
+    case "fetch_readable":     return await fetchReadable(args.url);
     case "fetch_jina":         return await fetchJina(args.url);
     case "fetch_browserless":  return await fetchBrowserless(args.url, args.script);
     case "read_uploaded_file":return await readUploadedFile(args.filename);
@@ -304,6 +319,21 @@ async function executeTool(name, args, userId = "default") {
       return deleted ? `Deleted schedule: "${args.name}"` : `No schedule found with name "${args.name}"`;
     }
     default: throw new Error(`Unknown tool: ${name}`);
+  }
+}
+
+// ── Plain HTTP fetch ──────────────────────────────────────────────────────────
+async function fetchReadable(url) {
+  try {
+    const res = await axios.get(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; bot/1.0)" },
+      timeout: 15_000,
+      maxContentLength: 2_000_000,
+    });
+    const text = String(res.data).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    return safeSlice(text, 8000);
+  } catch (err) {
+    return `fetch_readable failed: ${err.response?.status || ""} ${err.message}`;
   }
 }
 
