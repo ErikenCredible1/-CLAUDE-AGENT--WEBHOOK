@@ -450,6 +450,21 @@ const TOOL_DEFINITIONS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "print_content",
+      description: "Print text content directly to the user's home printer. Use when the user asks to print something — an email, document, note, or any text.",
+      parameters: {
+        type: "object",
+        properties: {
+          content: { type: "string", description: "The text content to print" },
+          title:   { type: "string", description: "Optional title printed as a header on the page" },
+        },
+        required: ["content"],
+      },
+    },
+  },
 ];
 
 // ─── Tool implementations ─────────────────────────────────────────────────────
@@ -561,6 +576,7 @@ async function executeTool(name, args, userId = "default") {
       const result = await runSubAgent(args.role, args.task, args.context || "", userId);
       return result;
     }
+    case "print_content":     return await printContent(args.content, args.title);
     case "create_pdf":        return await createPdf(args.filename, args.title, args.content);
     case "remember": {
       const { saveFact } = require("./memory");
@@ -911,6 +927,24 @@ async function createPdf(filename, title, content) {
 
     doc.end();
   });
+}
+
+async function printContent(content, title = "") {
+  const bridgeUrl = process.env.PRINT_BRIDGE_URL;
+  if (!bridgeUrl) return "Printer not configured. PRINT_BRIDGE_URL env var is missing.";
+
+  const res = await axios.post(
+    `${bridgeUrl}/print`,
+    { content, title },
+    {
+      headers: {
+        "Content-Type": "application/json",
+        "x-print-secret": process.env.PRINT_SECRET || "",
+      },
+      timeout: 15_000,
+    }
+  );
+  return res.data?.message || "Sent to printer.";
 }
 
 module.exports = { executeTool, TOOL_DEFINITIONS };

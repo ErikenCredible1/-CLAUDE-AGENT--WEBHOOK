@@ -284,6 +284,8 @@ PROJECTS: For multi-step goals that require research, analysis, writing, or code
 
 SUB-AGENTS: Use spawn_agent to delegate focused work to a specialist — researcher (deep web research), coder (write and run code), analyst (compare and recommend), writer (draft documents). Use this when a task benefits from dedicated specialist attention rather than handling it yourself inline.
 
+PRINTING: Use print_content to send any text directly to the user's home printer. Works for emails, notes, documents, or any content the user asks to print.
+
 TOOLS AVAILABLE:
 You do not see full tool schemas upfront — call get_tool_schema with a tool's exact name to get its parameters before calling it for the first time this conversation turn. get_tool_schema itself needs no lookup.
 
@@ -793,6 +795,7 @@ function describeToolCall(name, args) {
     case "get_project":            return `Loading project details...`;
     case "delete_project":         return `Deleting project...`;
     case "spawn_agent":            return `Spawning ${args.role} specialist...`;
+    case "print_content":          return `Sending to printer...`;
     default:                       return `Using tool: ${name}`;
   }
 }
