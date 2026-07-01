@@ -360,6 +360,40 @@ async function uploadToDrive({ filename, drive_folder_name = "Agent Files" }) {
   return `Uploaded to Drive!\nFile: ${safeName}\nLink: ${fileInfo.data.webViewLink}`;
 }
 
+// Upload raw text content to Drive without needing a workspace file
+async function saveTextToDrive(content, filename, folderName = "Agent Files") {
+  try {
+    const drive = getDrive();
+    const stream = Readable.from([content]);
+    const uploaded = await drive.files.create({
+      requestBody: { name: filename },
+      media: { mimeType: "text/plain", body: stream },
+      fields: "id, webViewLink, parents",
+    });
+    try {
+      const folderId = await getFolderId(drive, folderName);
+      if (folderId) {
+        const prevParents = (uploaded.data.parents || []).join(",");
+        await drive.files.update({
+          fileId: uploaded.data.id,
+          addParents: folderId,
+          removeParents: prevParents,
+          fields: "id",
+        });
+      }
+    } catch {}
+    await drive.permissions.create({
+      fileId: uploaded.data.id,
+      requestBody: { role: "reader", type: "anyone" },
+    });
+    const info = await drive.files.get({ fileId: uploaded.data.id, fields: "webViewLink" });
+    return info.data.webViewLink;
+  } catch (err) {
+    console.error("[saveTextToDrive] failed:", err.message);
+    return null;
+  }
+}
+
 async function listDriveFiles({ folder_name, max_results = 10 }) {
   const drive = getDrive();
   let query = "trashed=false";
@@ -572,4 +606,4 @@ function getMimeType(filename) {
   return types[ext] || "application/octet-stream";
 }
 
-module.exports = { executeGoogleTool, GOOGLE_TOOL_DEFINITIONS };
+module.exports = { executeGoogleTool, GOOGLE_TOOL_DEFINITIONS, saveTextToDrive };

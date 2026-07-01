@@ -1,6 +1,9 @@
 const { Redis } = require("@upstash/redis");
 const { randomBytes } = require("crypto");
 const axios = require("axios");
+const { saveTextToDrive } = require("./google-tools");
+
+const DRIVE_THRESHOLD = 3000;
 
 function getRedis() {
   return new Redis({ url: process.env.UPSTASH_REDIS_URL, token: process.env.UPSTASH_REDIS_TOKEN });
@@ -123,8 +126,16 @@ async function executeNextTasks(userId, sendFn) {
       const result = await runSubAgent(role, `${next.title}\n\nProject goal: ${project.goal}`, context, userId);
 
       next.status = "done";
-      next.result = result.slice(0, 3000);
       next.completed_at = new Date().toISOString();
+      if (result.length > DRIVE_THRESHOLD) {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        const link = await saveTextToDrive(result, `project-task-${next.id}-${timestamp}.txt`).catch(() => null);
+        next.result = link
+          ? `Full result saved to Drive: ${link}\n\nSummary: ${result.slice(0, 500)}...`
+          : result.slice(0, 3000);
+      } else {
+        next.result = result;
+      }
 
       const remaining = project.tasks.filter(t => t.status === "pending").length - 1;
       await saveProject(userId, project);

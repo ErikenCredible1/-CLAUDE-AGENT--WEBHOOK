@@ -1,5 +1,8 @@
 const axios = require("axios");
 const { executeTool, TOOL_DEFINITIONS } = require("./tools");
+const { saveTextToDrive } = require("./google-tools");
+
+const DRIVE_THRESHOLD = 3000;
 
 const ROLE_PROMPTS = {
   researcher: `You are a research specialist. Thoroughly research the given topic using web search and fetch tools. Return a comprehensive, well-structured report with key findings and sources. Be factual and complete.`,
@@ -48,7 +51,16 @@ async function runSubAgent(role, task, context = "", userId = "system") {
     messages.push(msg);
 
     if (!msg.tool_calls?.length) {
-      return msg.content || "(no output)";
+      const output = msg.content || "(no output)";
+      if (output.length > DRIVE_THRESHOLD) {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        const filename = `${role}-result-${timestamp}.txt`;
+        const link = await saveTextToDrive(output, filename).catch(() => null);
+        if (link) {
+          return `Result saved to Drive (too long to inline):\n${link}\n\nSummary (first 500 chars):\n${output.slice(0, 500)}...`;
+        }
+      }
+      return output;
     }
 
     for (const call of msg.tool_calls) {
