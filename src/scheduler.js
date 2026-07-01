@@ -20,9 +20,20 @@ function getQStash() {
  * @param {string} label - friendly name e.g. "Monday news summary"
  * @returns {string} scheduleId
  */
+const QSTASH_SCHEDULE_LIMIT = 5;
+
 async function createSchedule(userId, taskPrompt, cron, label) {
   const q = getQStash();
-  const baseUrl = process.env.RENDER_URL; // e.g. https://your-app.onrender.com
+  const baseUrl = process.env.RENDER_URL;
+
+  const existing = await q.schedules.list().catch(() => []);
+  if (existing.length >= QSTASH_SCHEDULE_LIMIT) {
+    const names = await listSchedules(userId);
+    const nameList = names.map((s, i) => `${i + 1}. ${s.label}`).join("\n");
+    throw new Error(
+      `Schedule limit reached (${existing.length}/${QSTASH_SCHEDULE_LIMIT} on free plan).\n\nYour active schedules:\n${nameList}\n\nDelete one with: delete schedule [name]`
+    );
+  }
 
   const schedule = await q.schedules.create({
     destination: `${baseUrl}/scheduled`,
